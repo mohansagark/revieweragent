@@ -1,4 +1,6 @@
 // Managed by revieweragent build (esbuild.action.mjs). Do not hand-edit — regenerate with `npm run build:action`.
+import { createRequire as __revieweragentCreateRequire } from 'node:module';
+const require = __revieweragentCreateRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
