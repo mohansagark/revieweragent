@@ -25,6 +25,8 @@ const baseCtx: EventContext = {
   isDraft: false,
   isFork: false,
   prAuthorLogin: "alice",
+  title: "",
+  body: "",
 };
 
 describe("decideSkip", () => {
@@ -97,5 +99,35 @@ describe("decideSkip", () => {
     };
     const decision = await decideSkip(octokit, "acme", "widgets", commentCtx, defaultConfig());
     expect(decision).toEqual({ skip: false });
+  });
+
+  it("treats maintain permission as write access", async () => {
+    const octokit = mockOctokit("maintain");
+    const commentCtx: EventContext = {
+      ...baseCtx,
+      eventName: "issue_comment",
+      action: "created",
+      commentBody: "/review",
+      commenterLogin: "org-maintainer",
+    };
+    const decision = await decideSkip(octokit, "acme", "widgets", commentCtx, defaultConfig());
+    expect(decision).toEqual({ skip: false });
+  });
+
+  it("treats a 404 collaborator lookup as no write access (fork outsider), not a thrown job failure", async () => {
+    const octokit = {
+      repos: {
+        getCollaboratorPermissionLevel: vi.fn().mockRejectedValue(Object.assign(new Error("Not Found"), { status: 404 })),
+      },
+    } as unknown as Octokit;
+    const commentCtx: EventContext = {
+      ...baseCtx,
+      eventName: "issue_comment",
+      action: "created",
+      commentBody: "/review",
+      commenterLogin: "outsider",
+    };
+    const decision = await decideSkip(octokit, "acme", "widgets", commentCtx, defaultConfig());
+    expect(decision).toEqual({ skip: true, reason: expect.stringContaining("write") });
   });
 });

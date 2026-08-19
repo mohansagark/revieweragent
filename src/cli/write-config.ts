@@ -40,6 +40,10 @@ export function resolveConfigWrite(
     return { content: serializeConfig(config), wasOverwrite: false };
   }
 
+  if (!isManagedConfig(existingRaw)) {
+    throw new UnmanagedConfigConflictError(path);
+  }
+
   if (!confirmed) {
     throw new UnmanagedConfigConflictError(path);
   }

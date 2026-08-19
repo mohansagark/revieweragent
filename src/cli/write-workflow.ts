@@ -28,6 +28,24 @@ function credentialEnvLine(auth: AuthType): string {
     : "          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}";
 }
 
+function subscriptionInstallSteps(auth: AuthType, shas: PinnedShas): string {
+  if (auth !== "subscription") return "";
+  return `      - uses: actions/cache@${shas.cacheSha}
+        with:
+          path: ~/.npm
+          key: revieweragent-claude-code-${shas.claudeCodeVersion}
+      - id: install-claude
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code@${shas.claudeCodeVersion}
+`;
+}
+
+function subscriptionInstallEnv(auth: AuthType): string {
+  if (auth !== "subscription") return "";
+  return `          REVIEWERAGENT_CLI_INSTALL_FAILED: \${{ steps.install-claude.outcome == 'failure' }}
+`;
+}
+
 export function buildWorkflowYaml(opts: WorkflowOptions): string {
   const { auth, shas } = opts;
   return `${WORKFLOW_MANAGED_HEADER}
@@ -47,6 +65,7 @@ permissions: {}
 jobs:
   ${JOB_NAME}:
     name: ${JOB_NAME}
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,11 +76,11 @@ jobs:
       - uses: actions/checkout@${shas.checkoutSha}
         with:
           persist-credentials: false
-      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
+${subscriptionInstallSteps(auth, shas)}      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
 ${credentialEnvLine(auth)}
-`;
+${subscriptionInstallEnv(auth)}`;
 }
 
 export class UnmarkedWorkflowConflictError extends Error {

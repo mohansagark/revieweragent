@@ -21,6 +21,8 @@ describe("resolveEventContext", () => {
     expect(ctx.isDraft).toBe(false);
     expect(ctx.prNumber).toBe(42);
     expect(ctx.headSha).toBe("headsha1");
+    expect(ctx.title).toBe("Add widgets");
+    expect(ctx.body).toBe("Please review");
   });
 
   it("resolves a draft PR", async () => {

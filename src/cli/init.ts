@@ -229,6 +229,15 @@ async function acquireCredential(auth: AuthType): Promise<string> {
   return validateApiKey(key);
 }
 
+export function decideOtherSecretDeletion(opts: {
+  hasOtherSecret: boolean;
+  confirmed: boolean;
+}): "noop" | "delete" | "abort" {
+  if (!opts.hasOtherSecret) return "noop";
+  if (!opts.confirmed) return "abort";
+  return "delete";
+}
+
 export async function runInit(options: InitOptions): Promise<void> {
   const token = resolveGitHubToken();
   const octokit = createGitHubClient(token);
@@ -238,7 +247,21 @@ export async function runInit(options: InitOptions): Promise<void> {
   const otherAuth: AuthType = options.auth === "api-key" ? "subscription" : "api-key";
   const otherSecretName =
     otherAuth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
-  if (await secrets.hasSecret(otherSecretName)) {
+  const hasOther = await secrets.hasSecret(otherSecretName);
+  let deleteConfirmed = options.nonInteractive;
+  if (hasOther && !options.nonInteractive) {
+    const ok = await p.confirm({
+      message: `Delete unused secret ${otherSecretName}? Only one auth secret can be live per repo.`,
+    });
+    deleteConfirmed = !p.isCancel(ok) && Boolean(ok);
+  }
+  const deletion = decideOtherSecretDeletion({ hasOtherSecret: hasOther, confirmed: deleteConfirmed });
+  if (deletion === "abort") {
+    throw new Error(
+      `Refusing to leave ${otherSecretName} in place. Confirm deletion or remove it manually, then re-run init.`,
+    );
+  }
+  if (deletion === "delete") {
     await secrets.deleteSecret(otherSecretName);
   }
   const secretName =
@@ -248,6 +271,12 @@ export async function runInit(options: InitOptions): Promise<void> {
   const shas = loadPinnedShas();
   const workflowYaml = buildWorkflowYaml({ auth: options.auth, shas });
   const existingWorkflow = existsSync(WORKFLOW_PATH) ? readFileSync(WORKFLOW_PATH, "utf8") : undefined;
+  if (existingWorkflow !== undefined && isManagedWorkflow(existingWorkflow) && !options.nonInteractive) {
+    const ok = await p.confirm({ message: "Overwrite existing .github/workflows/revieweragent.yml?" });
+    if (p.isCancel(ok) || !ok) {
+      throw new Error("Init cancelled: existing workflow not overwritten.");
+    }
+  }
   const workflowResult = resolveWorkflowWrite(WORKFLOW_PATH, existingWorkflow, workflowYaml);
   writeFile(WORKFLOW_PATH, workflowResult.content);
 
@@ -257,6 +286,12 @@ export async function runInit(options: InitOptions): Promise<void> {
     block_severity: options.severity,
   });
   const existingConfig = existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : undefined;
+  if (existingConfig !== undefined && !options.nonInteractive) {
+    const ok = await p.confirm({ message: "Overwrite existing .revieweragent.yml?" });
+    if (p.isCancel(ok) || !ok) {
+      throw new Error("Init cancelled: existing config not overwritten.");
+    }
+  }
   const configResult = resolveConfigWrite(CONFIG_PATH, existingConfig, config, true);
   writeFile(CONFIG_PATH, configResult.content);
 

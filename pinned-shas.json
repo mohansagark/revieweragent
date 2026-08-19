@@ -1,7 +1,9 @@
 {
   "_comment": "Filled in by the release process before publishing (SPEC.md §7: 'Record the exact owner/repo in the package at release time; init writes that literal into the workflow. Do not leave <this-github-repo> as a placeholder in generated YAML.'). checkoutSha pins actions/checkout to an exact upstream commit SHA. actionOwner/actionRepo/reviewActionSha identify THIS package's own public repo and pin its actions/review path to the commit being released — never the repo init is installing into.",
   "checkoutSha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+  "cacheSha": "5a3ec84eff668545956fd18022155c47e93e2684",
   "actionOwner": "mohansagark",
   "actionRepo": "revieweragent",
-  "reviewActionSha": "6e7484b987def7d939d5bb685fbf5b90570f4653"
+  "reviewActionSha": "6e7484b987def7d939d5bb685fbf5b90570f4653",
+  "claudeCodeVersion": "2.1.235"
 }

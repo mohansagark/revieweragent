@@ -14,8 +14,10 @@ import { dirname, join } from "node:path";
 export interface PinnedShas {
   checkoutSha: string;
   reviewActionSha: string;
+  cacheSha: string;
   actionOwner: string;
   actionRepo: string;
+  claudeCodeVersion: string;
 }
 
 export class UnpinnedReleaseError extends Error {
@@ -35,12 +37,16 @@ export function loadPinnedShas(pathOverride?: string): PinnedShas {
   const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<PinnedShas>;
   if (!raw.checkoutSha) throw new UnpinnedReleaseError("checkoutSha");
   if (!raw.reviewActionSha) throw new UnpinnedReleaseError("reviewActionSha");
+  if (!raw.cacheSha) throw new UnpinnedReleaseError("cacheSha");
   if (!raw.actionOwner) throw new UnpinnedReleaseError("actionOwner");
   if (!raw.actionRepo) throw new UnpinnedReleaseError("actionRepo");
+  if (!raw.claudeCodeVersion) throw new UnpinnedReleaseError("claudeCodeVersion");
   return {
     checkoutSha: raw.checkoutSha,
     reviewActionSha: raw.reviewActionSha,
+    cacheSha: raw.cacheSha,
     actionOwner: raw.actionOwner,
     actionRepo: raw.actionRepo,
+    claudeCodeVersion: raw.claudeCodeVersion,
   };
 }

@@ -3,10 +3,9 @@ import type { EventContext } from "./review-event-context.js";
 import type { RevieweragentConfig } from "../core/config-schema.js";
 
 // SPEC.md §9's skip-vs-no-op table. A skip here means: no Reviews API
-// call, no check run on head SHA, exit 0. Job-level `if:` in the
-// generated workflow already drops the most obvious issue_comment noise
-// (SPEC §9), but this is the authoritative check — a job-level `if:`
-// skip is not itself a safe gate.
+// call, no check run on head SHA, exit 0. The generated workflow may drop
+// non-PR issue_comment noise with a job-level `if:` (SPEC §9); this is
+// still the authoritative check — a job-level `if:` skip is not a safe gate.
 
 export type SkipDecision = { skip: true; reason: string } | { skip: false };
 
@@ -16,12 +15,18 @@ async function hasWriteAccess(
   repo: string,
   username: string,
 ): Promise<boolean> {
-  const { data } = await octokit.repos.getCollaboratorPermissionLevel({
-    owner,
-    repo,
-    username,
-  });
-  return data.permission === "write" || data.permission === "admin";
+  try {
+    const { data } = await octokit.repos.getCollaboratorPermissionLevel({
+      owner,
+      repo,
+      username,
+    });
+    return data.permission === "admin" || data.permission === "maintain" || data.permission === "write";
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 404 || status === 403) return false;
+    throw err;
+  }
 }
 
 export async function decideSkip(
