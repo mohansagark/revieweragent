@@ -18,8 +18,6 @@ export const WORKFLOW_MARKER = "Managed by revieweragent";
 export const JOB_NAME = "revieweragent";
 
 export interface WorkflowOptions {
-  owner: string;
-  repo: string;
   auth: AuthType;
   shas: PinnedShas;
 }
@@ -31,7 +29,7 @@ function credentialEnvLine(auth: AuthType): string {
 }
 
 export function buildWorkflowYaml(opts: WorkflowOptions): string {
-  const { owner, repo, auth, shas } = opts;
+  const { auth, shas } = opts;
   return `${WORKFLOW_MANAGED_HEADER}
 
 on:
@@ -59,7 +57,7 @@ jobs:
       - uses: actions/checkout@${shas.checkoutSha}
         with:
           persist-credentials: false
-      - uses: ${owner}/${repo}/actions/review@${shas.reviewActionSha}
+      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
         env:
 ${credentialEnvLine(auth)}
 `;

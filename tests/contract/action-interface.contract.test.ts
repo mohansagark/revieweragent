@@ -10,10 +10,13 @@ import { buildWorkflowYaml, JOB_NAME } from "../../src/cli/write-workflow.js";
 
 describe("action-interface contract", () => {
   const yaml = buildWorkflowYaml({
-    owner: "acme",
-    repo: "widgets",
     auth: "api-key",
-    shas: { checkoutSha: "a".repeat(40), reviewActionSha: "b".repeat(40) },
+    shas: {
+      checkoutSha: "a".repeat(40),
+      reviewActionSha: "b".repeat(40),
+      actionOwner: "revieweragent-org",
+      actionRepo: "revieweragent",
+    },
   });
   const doc = parseYaml(yaml);
 
@@ -50,9 +53,29 @@ describe("action-interface contract", () => {
     expect(checkoutStep.with.ref).toBeUndefined();
   });
 
-  it("references this repo's actions/review path with an exact SHA pin", () => {
+  it("references the package's own actions/review path with an exact SHA pin — never the target repo being installed into", () => {
     const reviewStep = doc.jobs.revieweragent.steps[1];
-    expect(reviewStep.uses).toBe(`acme/widgets/actions/review@${"b".repeat(40)}`);
+    expect(reviewStep.uses).toBe(`revieweragent-org/revieweragent/actions/review@${"b".repeat(40)}`);
+  });
+
+  it("regression: buildWorkflowYaml takes no target-repo owner/repo at all", () => {
+    // Real bug caught in manual testing: init.ts once passed the repo
+    // being installed INTO as buildWorkflowYaml's owner/repo, generating
+    // `uses: <target-owner>/<target-repo>/actions/review@sha` — a path
+    // GitHub Actions can never resolve, since actions/review only exists
+    // in this package's own repo. WorkflowOptions has no owner/repo field
+    // any more; only shas.actionOwner/actionRepo feed the `uses:` line.
+    const opts: Parameters<typeof buildWorkflowYaml>[0] = {
+      auth: "api-key",
+      shas: {
+        checkoutSha: "a".repeat(40),
+        reviewActionSha: "b".repeat(40),
+        actionOwner: "revieweragent-org",
+        actionRepo: "revieweragent",
+      },
+    };
+    expect(Object.keys(opts)).not.toContain("owner");
+    expect(Object.keys(opts)).not.toContain("repo");
   });
 
   it("action.yml exists at the locked path", () => {

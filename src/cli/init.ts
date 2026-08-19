@@ -246,7 +246,7 @@ export async function runInit(options: InitOptions): Promise<void> {
   await secrets.putSecret(secretName, options.credential);
 
   const shas = loadPinnedShas();
-  const workflowYaml = buildWorkflowYaml({ owner, repo, auth: options.auth, shas });
+  const workflowYaml = buildWorkflowYaml({ auth: options.auth, shas });
   const existingWorkflow = existsSync(WORKFLOW_PATH) ? readFileSync(WORKFLOW_PATH, "utf8") : undefined;
   const workflowResult = resolveWorkflowWrite(WORKFLOW_PATH, existingWorkflow, workflowYaml);
   writeFile(WORKFLOW_PATH, workflowResult.content);
