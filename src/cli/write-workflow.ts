@@ -71,7 +71,12 @@ jobs:
     # Drafts never run at all: GitHub natively blocks merging a draft PR
     # regardless of check status, so skipping here is safe (unlike the
     # other no-op cases, which stay code-side — see review-skip-rules.ts).
-    if: github.event_name != 'pull_request_target' || github.event.pull_request.draft == false
+    # issue_comment noise (comments on issues, not PRs) is dropped the
+    # same way — SPEC.md §9: "Job-level if: is allowed only to drop
+    # obvious non-PR issue_comment noise."
+    if: |-
+      (github.event_name != 'pull_request_target' || github.event.pull_request.draft == false) &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -82,19 +87,26 @@ jobs:
       - uses: actions/checkout@${shas.checkoutSha}
         with:
           persist-credentials: false
-${claudeCliInstallStep(auth)}      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
+${claudeCliInstallStep(auth, shas)}      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
 ${credentialEnvLine(auth)}
 ${subscriptionInstallEnv(auth)}`;
 }
 
-function claudeCliInstallStep(auth: AuthType): string {
+function claudeCliInstallStep(auth: AuthType, shas: PinnedShas): string {
   if (auth !== "subscription") return "";
   // continue-on-error: SPEC.md §7/§9 — npm install failure is an
   // availability skip, not fail-closed. The review step reads
   // REVIEWERAGENT_CLI_INSTALL_FAILED and classifies ENOENT accordingly.
-  return `      - id: install-claude
+  // actions/cache (follow-up work noted in SPEC.md §7): avoids a fresh
+  // npm fetch on every PR — cache key is pinned to the exact CLI version,
+  // so a version bump naturally invalidates it rather than serving stale.
+  return `      - uses: actions/cache@${shas.cacheSha}
+        with:
+          path: ~/.npm
+          key: revieweragent-claude-code-${CLAUDE_CLI_VERSION}
+      - id: install-claude
         continue-on-error: true
         run: npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}
 `;

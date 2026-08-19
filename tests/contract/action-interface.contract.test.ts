@@ -16,6 +16,7 @@ describe("action-interface contract", () => {
       reviewActionSha: "b".repeat(40),
       actionOwner: "revieweragent-org",
       actionRepo: "revieweragent",
+      cacheSha: "c".repeat(40),
     },
   });
   const doc = parseYaml(yaml);
@@ -33,6 +34,11 @@ describe("action-interface contract", () => {
 
   it("skips the job entirely for draft PRs via job-level if: — safe because GitHub natively blocks merging any draft PR regardless of check status", () => {
     expect(job.if).toContain("draft == false");
+  });
+
+  it("drops issue_comment noise (comments on issues, not PRs) via job-level if: — SPEC.md §9 explicitly allows this", () => {
+    expect(job.if).toContain("issue_comment");
+    expect(job.if).toContain("github.event.issue.pull_request");
   });
 
   it("declares exactly the required job permissions", () => {
@@ -125,19 +131,29 @@ describe("subscription auth installs the pinned Claude CLI", () => {
       reviewActionSha: "b".repeat(40),
       actionOwner: "revieweragent-org",
       actionRepo: "revieweragent",
+      cacheSha: "c".repeat(40),
     },
   });
   const subDoc = parseYaml(subscriptionYaml);
   const subJob = subDoc.jobs[WORKFLOW_JOB_ID];
 
+  it("caches the npm global install directory before installing, pinned by exact SHA", () => {
+    // Follow-up work from SPEC.md §7 (added after PR #1 surfaced it as a
+    // real, verified actions/cache pin) — avoids a fresh npm fetch on
+    // every PR for auth: subscription installs.
+    expect(subJob.steps).toHaveLength(4);
+    const cacheStep = subJob.steps[1];
+    expect(cacheStep.uses).toBe(`actions/cache@${"c".repeat(40)}`);
+    expect(cacheStep.with.path).toBe("~/.npm");
+  });
+
   it("installs @anthropic-ai/claude-code globally before the review step", () => {
-    expect(subJob.steps).toHaveLength(3);
-    expect(subJob.steps[1].run).toMatch(/npm install -g @anthropic-ai\/claude-code@\d+\.\d+\.\d+/);
-    expect(subJob.steps[1]["continue-on-error"]).toBe(true);
+    expect(subJob.steps[2].run).toMatch(/npm install -g @anthropic-ai\/claude-code@\d+\.\d+\.\d+/);
+    expect(subJob.steps[2]["continue-on-error"]).toBe(true);
   });
 
   it("passes install failure into the review step so npm outage can availability-skip", () => {
-    const review = subJob.steps[2];
+    const review = subJob.steps[3];
     expect(review.env.REVIEWERAGENT_CLI_INSTALL_FAILED).toBeDefined();
     expect(review.env.CLAUDE_CODE_OAUTH_TOKEN).toBeDefined();
     expect(review.env.GITHUB_TOKEN).toBeDefined();

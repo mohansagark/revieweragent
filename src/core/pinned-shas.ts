@@ -16,6 +16,9 @@ export interface PinnedShas {
   reviewActionSha: string;
   actionOwner: string;
   actionRepo: string;
+  // actions/cache pin for the CLI-install cache (SPEC.md §7 follow-up:
+  // avoids a fresh npm fetch on every PR for auth: subscription installs).
+  cacheSha: string;
 }
 
 export class UnpinnedReleaseError extends Error {
@@ -37,10 +40,12 @@ export function loadPinnedShas(pathOverride?: string): PinnedShas {
   if (!raw.reviewActionSha) throw new UnpinnedReleaseError("reviewActionSha");
   if (!raw.actionOwner) throw new UnpinnedReleaseError("actionOwner");
   if (!raw.actionRepo) throw new UnpinnedReleaseError("actionRepo");
+  if (!raw.cacheSha) throw new UnpinnedReleaseError("cacheSha");
   return {
     checkoutSha: raw.checkoutSha,
     reviewActionSha: raw.reviewActionSha,
     actionOwner: raw.actionOwner,
     actionRepo: raw.actionRepo,
+    cacheSha: raw.cacheSha,
   };
 }
