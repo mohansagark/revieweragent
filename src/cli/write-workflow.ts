@@ -14,8 +14,15 @@ export const WORKFLOW_MANAGED_HEADER = [
 
 export const WORKFLOW_MARKER = "Managed by revieweragent";
 
-// Locked — renaming breaks every gate-mode install (SPEC.md §7).
+// Locked — renaming breaks every gate-mode install (SPEC.md §7). This is
+// the Checks API name required in branch protection, NOT the workflow
+// job id/name — GitHub auto-creates its own check run named after the
+// job the instant the job starts, and (per a Feb 2025 GitHub policy
+// change, confirmed empirically) blocks the default GITHUB_TOKEN from
+// updating that auto-check's conclusion via the API. Giving the job a
+// different id than this check name avoids that collision entirely.
 export const JOB_NAME = "revieweragent";
+export const WORKFLOW_JOB_ID = "revieweragent-run";
 
 export interface WorkflowOptions {
   auth: AuthType;
@@ -45,8 +52,12 @@ concurrency:
 permissions: {}
 
 jobs:
-  ${JOB_NAME}:
-    name: ${JOB_NAME}
+  ${WORKFLOW_JOB_ID}:
+    name: ${WORKFLOW_JOB_ID}
+    # Drafts never run at all: GitHub natively blocks merging a draft PR
+    # regardless of check status, so skipping here is safe (unlike the
+    # other no-op cases, which stay code-side — see review-skip-rules.ts).
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
-import { buildWorkflowYaml, JOB_NAME } from "../../src/cli/write-workflow.js";
+import { buildWorkflowYaml, JOB_NAME, WORKFLOW_JOB_ID } from "../../src/cli/write-workflow.js";
 
 // Validates the generated workflow against
 // specs/001-v1-core-commands/contracts/action-interface.md's required
-// shape: locked job name, permissions, no merge_group, exactly one
+// shape: locked check name, permissions, no merge_group, exactly one
 // credential env var, base-only checkout.
 
 describe("action-interface contract", () => {
@@ -19,14 +19,24 @@ describe("action-interface contract", () => {
     },
   });
   const doc = parseYaml(yaml);
+  const job = doc.jobs[WORKFLOW_JOB_ID];
 
-  it("locks the job name to 'revieweragent'", () => {
+  it("locks the required-check name to 'revieweragent'", () => {
     expect(JOB_NAME).toBe("revieweragent");
-    expect(doc.jobs.revieweragent.name).toBe("revieweragent");
+  });
+
+  it("uses a different workflow job id than the check name — GitHub auto-creates a check named after the job, and (confirmed empirically, Feb 2025 policy) blocks GITHUB_TOKEN from updating that auto-check's conclusion via the API", () => {
+    expect(WORKFLOW_JOB_ID).not.toBe(JOB_NAME);
+    expect(job).toBeDefined();
+    expect(doc.jobs[JOB_NAME]).toBeUndefined();
+  });
+
+  it("skips the job entirely for draft PRs via job-level if: — safe because GitHub natively blocks merging any draft PR regardless of check status", () => {
+    expect(job.if).toContain("draft == false");
   });
 
   it("declares exactly the required job permissions", () => {
-    expect(doc.jobs.revieweragent.permissions).toEqual({
+    expect(job.permissions).toEqual({
       contents: "read",
       "pull-requests": "write",
       checks: "write",
@@ -42,7 +52,7 @@ describe("action-interface contract", () => {
   });
 
   it("sets exactly one credential env var matching the auth type", () => {
-    const step = doc.jobs.revieweragent.steps[1];
+    const step = job.steps[1];
     expect(step.env.ANTHROPIC_API_KEY).toBeDefined();
     expect(step.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
@@ -53,18 +63,18 @@ describe("action-interface contract", () => {
     // process.env — it must be passed explicitly via env:, same as any
     // other secret. Without this the review step can never call the
     // GitHub API at all (checks, reviews, actor rate-limit).
-    const step = doc.jobs.revieweragent.steps[1];
+    const step = job.steps[1];
     expect(step.env.GITHUB_TOKEN).toBeDefined();
   });
 
   it("checks out with persist-credentials: false and no ref override", () => {
-    const checkoutStep = doc.jobs.revieweragent.steps[0];
+    const checkoutStep = job.steps[0];
     expect(checkoutStep.with["persist-credentials"]).toBe(false);
     expect(checkoutStep.with.ref).toBeUndefined();
   });
 
   it("references the package's own actions/review path with an exact SHA pin — never the target repo being installed into", () => {
-    const reviewStep = doc.jobs.revieweragent.steps[1];
+    const reviewStep = job.steps[1];
     expect(reviewStep.uses).toBe(`revieweragent-org/revieweragent/actions/review@${"b".repeat(40)}`);
   });
 
