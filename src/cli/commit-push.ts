@@ -16,12 +16,21 @@ export class UncommittedUnrelatedChangesError extends Error {
 
 const COMMIT_MESSAGE = "chore: install revieweragent\n\nWritten by `npx revieweragent init --commit`.";
 
-function gitStatusPorcelain(): string[] {
-  const out = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" });
+export function parsePorcelainPaths(out: string): string[] {
   return out
     .split("\n")
     .filter(Boolean)
-    .map((line) => line.slice(3).trim());
+    .map((line) => {
+      const rest = line.slice(3);
+      const renamed = rest.split(" -> ");
+      const path = renamed.length > 1 ? renamed[renamed.length - 1]! : rest;
+      return path.replace(/^"(.*)"$/, "$1").trim();
+    });
+}
+
+function gitStatusPorcelain(): string[] {
+  const out = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" });
+  return parsePorcelainPaths(out);
 }
 
 export function commitAndMaybePush(writtenPaths: string[], push: boolean): void {

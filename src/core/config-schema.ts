@@ -10,6 +10,13 @@ export type AuthType = "subscription" | "api-key";
 export type Mode = "advisory" | "gate";
 export type Severity = "critical" | "high" | "medium" | "low" | "note";
 export type BlockSeverity = "any" | Exclude<Severity, "note">;
+export const BLOCK_SEVERITY_VALUES: readonly BlockSeverity[] = [
+  "any",
+  "critical",
+  "high",
+  "medium",
+  "low",
+];
 export type ForkPolicy = "auto" | "comment-gated";
 export type OnLimit = "skip" | "block";
 
@@ -81,6 +88,13 @@ export class InvalidConfigYamlError extends Error {
   }
 }
 
+export class InvalidConfigError extends Error {
+  constructor(message: string) {
+    super(`.revieweragent.yml is invalid: ${message}`);
+    this.name = "InvalidConfigError";
+  }
+}
+
 /** Read + validate contract for the `review` runtime (fail-closed on bad version). */
 export function parseConfig(raw: string): RevieweragentConfig {
   let doc: Document;
@@ -96,10 +110,53 @@ export function parseConfig(raw: string): RevieweragentConfig {
     throw new UnrecognizedConfigVersionError(obj.version);
   }
 
-  // Unknown keys are ignored (with a warning left to the caller), not
-  // stripped from what we return — the installer's write path preserves
-  // them; the review runtime just doesn't need them.
-  return { ...defaultConfig(), ...obj };
+  const config = { ...defaultConfig(), ...obj } as RevieweragentConfig;
+  validateConfig(config);
+  return config;
+}
+
+function validateConfig(config: RevieweragentConfig): void {
+  if (config.provider !== "claude") {
+    throw new InvalidConfigError(`unsupported provider "${String(config.provider)}"`);
+  }
+  if (config.auth !== "subscription" && config.auth !== "api-key") {
+    throw new InvalidConfigError(`unsupported auth "${String(config.auth)}"`);
+  }
+  if (config.mode !== "advisory" && config.mode !== "gate") {
+    throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);
+  }
+  if (!(BLOCK_SEVERITY_VALUES as readonly string[]).includes(config.block_severity)) {
+    throw new InvalidConfigError(`unsupported block_severity "${String(config.block_severity)}"`);
+  }
+  if (config.fork_policy !== "auto" && config.fork_policy !== "comment-gated") {
+    throw new InvalidConfigError(`unsupported fork_policy "${String(config.fork_policy)}"`);
+  }
+  if (config.on_limit !== "skip" && config.on_limit !== "block") {
+    throw new InvalidConfigError(`unsupported on_limit "${String(config.on_limit)}"`);
+  }
+  if (typeof config.max_diff_lines !== "number" || !Number.isFinite(config.max_diff_lines) || config.max_diff_lines < 1) {
+    throw new InvalidConfigError("max_diff_lines must be a positive number");
+  }
+  if (
+    typeof config.max_prompt_tokens !== "number" ||
+    !Number.isFinite(config.max_prompt_tokens) ||
+    config.max_prompt_tokens < 1
+  ) {
+    throw new InvalidConfigError("max_prompt_tokens must be a positive number");
+  }
+  if (
+    typeof config.max_fork_reviews_per_actor_per_hour !== "number" ||
+    !Number.isFinite(config.max_fork_reviews_per_actor_per_hour) ||
+    config.max_fork_reviews_per_actor_per_hour < 0
+  ) {
+    throw new InvalidConfigError("max_fork_reviews_per_actor_per_hour must be a non-negative number");
+  }
+  if (typeof config.trigger_phrase !== "string" || config.trigger_phrase.length === 0) {
+    throw new InvalidConfigError("trigger_phrase must be a non-empty string");
+  }
+  if (!Array.isArray(config.exclude) || config.exclude.some((g) => typeof g !== "string")) {
+    throw new InvalidConfigError("exclude must be an array of strings");
+  }
 }
 
 /**

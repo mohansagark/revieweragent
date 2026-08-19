@@ -11,15 +11,16 @@ import {
   type Mode,
   type BlockSeverity,
   type RevieweragentConfig,
+  BLOCK_SEVERITY_VALUES,
 } from "../core/config-schema.js";
 import { readCachedCredential, writeCachedCredential } from "../core/credential-cache.js";
-import { requiredDependenciesFor, runFixCommand, runGhAuthLogin } from "./dependency-checks.js";
+import { requiredDependenciesFor, runFixCommand, runGhAuthLogin, checkGitRepo } from "./dependency-checks.js";
 import { runSetupToken } from "../provider/claude/setup-token.js";
 import { validateApiKey } from "../provider/claude/api-key-credential.js";
 import { claudeProvider } from "../provider/claude/registry-entry.js";
 import { listProvidersForCategory, type PromptCategory } from "../provider/registry.js";
 import { buildWorkflowYaml, resolveWorkflowWrite, isManagedWorkflow } from "./write-workflow.js";
-import { resolveConfigWrite } from "./write-config.js";
+import { resolveConfigWrite, isManagedConfig } from "./write-config.js";
 import { printCodeownersRecommendation } from "./print-codeowners.js";
 import { printBranchProtectionInstructions } from "./print-protection-instructions.js";
 import { commitAndMaybePush } from "./commit-push.js";
@@ -67,6 +68,9 @@ export function parseNonInteractiveOptions(argv: {
   if (mode !== "advisory" && mode !== "gate") throw new MissingInputError("mode");
 
   const severity = (argv.severity as BlockSeverity | undefined) ?? "high";
+  if (!(BLOCK_SEVERITY_VALUES as readonly string[]).includes(severity)) {
+    throw new MissingInputError("severity");
+  }
 
   const credential =
     auth === "api-key"
@@ -229,27 +233,30 @@ async function acquireCredential(auth: AuthType): Promise<string> {
   return validateApiKey(key);
 }
 
+export function decideOtherSecretDeletion(opts: {
+  hasOtherSecret: boolean;
+  confirmed: boolean;
+}): "noop" | "delete" | "abort" {
+  if (!opts.hasOtherSecret) return "noop";
+  if (!opts.confirmed) return "abort";
+  return "delete";
+}
+
 export async function runInit(options: InitOptions): Promise<void> {
   const token = resolveGitHubToken();
   const octokit = createGitHubClient(token);
   const { owner, repo } = parseOwnerRepo(getGitRemoteUrl());
 
-  const secrets = createGitHubSecretsPort(octokit, owner, repo);
-  const otherAuth: AuthType = options.auth === "api-key" ? "subscription" : "api-key";
-  const otherSecretName =
-    otherAuth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
-  if (await secrets.hasSecret(otherSecretName)) {
-    await secrets.deleteSecret(otherSecretName);
-  }
-  const secretName =
-    options.auth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
-  await secrets.putSecret(secretName, options.credential);
-
   const shas = loadPinnedShas();
   const workflowYaml = buildWorkflowYaml({ auth: options.auth, shas });
   const existingWorkflow = existsSync(WORKFLOW_PATH) ? readFileSync(WORKFLOW_PATH, "utf8") : undefined;
+  if (existingWorkflow !== undefined && isManagedWorkflow(existingWorkflow) && !options.nonInteractive) {
+    const ok = await p.confirm({ message: "Overwrite existing .github/workflows/revieweragent.yml?" });
+    if (p.isCancel(ok) || !ok) {
+      throw new Error("Init cancelled: existing workflow not overwritten.");
+    }
+  }
   const workflowResult = resolveWorkflowWrite(WORKFLOW_PATH, existingWorkflow, workflowYaml);
-  writeFile(WORKFLOW_PATH, workflowResult.content);
 
   const config: RevieweragentConfig = defaultConfig({
     auth: options.auth,
@@ -257,8 +264,46 @@ export async function runInit(options: InitOptions): Promise<void> {
     block_severity: options.severity,
   });
   const existingConfig = existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : undefined;
+  if (existingConfig !== undefined && isManagedConfig(existingConfig) && !options.nonInteractive) {
+    const ok = await p.confirm({ message: "Overwrite existing .revieweragent.yml?" });
+    if (p.isCancel(ok) || !ok) {
+      throw new Error("Init cancelled: existing config not overwritten.");
+    }
+  }
   const configResult = resolveConfigWrite(CONFIG_PATH, existingConfig, config, true);
+
+  const secrets = createGitHubSecretsPort(octokit, owner, repo);
+  const otherAuth: AuthType = options.auth === "api-key" ? "subscription" : "api-key";
+  const otherSecretName =
+    otherAuth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
+  const hasOther = await secrets.hasSecret(otherSecretName);
+  let deleteConfirmed = options.nonInteractive;
+  if (hasOther && !options.nonInteractive) {
+    const ok = await p.confirm({
+      message: `Delete unused secret ${otherSecretName}? Only one auth secret can be live per repo.`,
+    });
+    deleteConfirmed = !p.isCancel(ok) && Boolean(ok);
+  }
+  const deletion = decideOtherSecretDeletion({ hasOtherSecret: hasOther, confirmed: deleteConfirmed });
+  if (deletion === "abort") {
+    throw new Error(
+      `Refusing to leave ${otherSecretName} in place. Confirm deletion or remove it manually, then re-run init.`,
+    );
+  }
+
+  const secretName =
+    options.auth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
+  // Write the new secret before touching files so a later write failure still
+  // leaves the currently-checked-in workflow pointing at a live credential.
+  // Delete the unused secret only after the new files are on disk.
+  await secrets.putSecret(secretName, options.credential);
+
+  writeFile(WORKFLOW_PATH, workflowResult.content);
   writeFile(CONFIG_PATH, configResult.content);
+
+  if (deletion === "delete") {
+    await secrets.deleteSecret(otherSecretName);
+  }
 
   const { data: user } = await octokit.users.getAuthenticated();
   printCodeownersRecommendation(user.login);
@@ -290,6 +335,9 @@ export async function init(args: {
   push?: boolean;
 }): Promise<number> {
   try {
+    if (!checkGitRepo().present) {
+      throw new Error("Not a git repository. Run this from the repo you want to install into.");
+    }
     const options = args.nonInteractive
       ? parseNonInteractiveOptions(args)
       : await promptForInitOptions();
@@ -300,7 +348,10 @@ export async function init(args: {
       process.stderr.write(JSON.stringify({ error: "missing_input", field: err.field }) + "\n");
       return 1;
     }
-    if (err instanceof Error && err.name === "UnmarkedWorkflowConflictError") {
+    if (
+      err instanceof Error &&
+      (err.name === "UnmanagedConfigConflictError" || err.name === "UnmarkedWorkflowConflictError")
+    ) {
       process.stderr.write(JSON.stringify({ error: "unmarked_conflict", message: err.message }) + "\n");
       return 1;
     }

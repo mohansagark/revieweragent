@@ -1,3 +1,4 @@
+import { FINDINGS_JSON_SCHEMA } from "../../core/findings-schema.js";
 import type { ClassifiableError } from "../../core/error-classifier.js";
 import { ModelBackendError } from "./subscription.js";
 
@@ -33,7 +34,7 @@ export async function callApiKeyBackend(
       body: JSON.stringify({
         model: DEFAULT_MODEL,
         max_tokens: 4096,
-        system: systemPrompt,
+        system: `${systemPrompt}\n\nFindings JSON schema:\n${JSON.stringify(FINDINGS_JSON_SCHEMA)}`,
         messages: [{ role: "user", content: userPayload }],
       }),
     });

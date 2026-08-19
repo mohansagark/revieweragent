@@ -2,9 +2,11 @@ import type { Octokit } from "@octokit/rest";
 import type { ReviewPort, FindingComment } from "../types.js";
 import { findReviewByMarker, bodyWithMarker } from "../../core/idempotency.js";
 
-// SPEC.md §9 "Review object vs gate" / §14. Native PR Review, type
-// COMMENT, always — never APPROVE or REQUEST_CHANGES. This is never the
-// gate; checks.ts is.
+// GITHUB_TOKEN reviews are always authored by github-actions[bot]. Do not
+// add GITHUB_ACTOR: on pull_request_target from a fork, that is the
+// untrusted PR author, and a forged marker comment would match as "ours"
+// then 403 on updateReview (they don't own the bot's review).
+const WORKFLOW_REVIEW_ACTOR = "github-actions[bot]";
 
 export function createGitHubReviewPort(
   octokit: Octokit,
@@ -13,8 +15,21 @@ export function createGitHubReviewPort(
 ): ReviewPort {
   return {
     async findExistingReview(pr: number, headSha: string) {
-      const { data } = await octokit.pulls.listReviews({ owner, repo, pull_number: pr });
-      return findReviewByMarker(data as { id: number; body: string }[], headSha);
+      for await (const response of octokit.paginate.iterator(octokit.pulls.listReviews, {
+        owner,
+        repo,
+        pull_number: pr,
+        per_page: 100,
+      })) {
+        const page = (
+          response.data as { id: number; body?: string | null; user?: { login?: string | null } | null }[]
+        )
+          .filter((r) => r.user?.login === WORKFLOW_REVIEW_ACTOR)
+          .map((r) => ({ id: r.id, body: r.body ?? "" }));
+        const match = findReviewByMarker(page, headSha);
+        if (match) return { id: match.id };
+      }
+      return undefined;
     },
 
     async createReview(
@@ -40,9 +55,6 @@ export function createGitHubReviewPort(
     },
 
     async updateReview(reviewId: number, pr: number, headSha: string, summary: string): Promise<void> {
-      // SPEC.md §14: PUT is the supported update path — no
-      // submitted/pending restriction. Never dismiss, never stack. The
-      // marker is re-embedded so the next retry's lookup still matches.
       await octokit.pulls.updateReview({
         owner,
         repo,

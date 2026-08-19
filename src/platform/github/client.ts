@@ -31,7 +31,7 @@ export function createGitHubClient(token = resolveGitHubToken()): Octokit {
 
 export function parseOwnerRepo(remoteUrl: string): { owner: string; repo: string } {
   // Handles both git@github.com:owner/repo.git and https://github.com/owner/repo(.git)
-  const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/);
+  const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
   if (!match) {
     throw new Error(`Could not parse a GitHub owner/repo from remote: ${remoteUrl}`);
   }

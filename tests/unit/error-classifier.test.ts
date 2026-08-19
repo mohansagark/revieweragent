@@ -2,11 +2,12 @@ import { describe, it, expect } from "vitest";
 import { classifyError, checkOutcomeFor } from "../../src/core/error-classifier.js";
 
 describe("classifyError", () => {
-  it("classifies 401/403/missing-secret/invalid-json as fail-closed", () => {
+  it("classifies 401/403/missing-secret/invalid-json/cli-missing as fail-closed", () => {
     expect(classifyError({ kind: "http_401" })).toBe("fail-closed");
     expect(classifyError({ kind: "http_403" })).toBe("fail-closed");
     expect(classifyError({ kind: "missing_secret" })).toBe("fail-closed");
     expect(classifyError({ kind: "invalid_json" })).toBe("fail-closed");
+    expect(classifyError({ kind: "cli_missing" })).toBe("fail-closed");
   });
 
   it("classifies 429/5xx/npm-fetch-fail as availability-skip", () => {
@@ -15,9 +16,15 @@ describe("classifyError", () => {
     expect(classifyError({ kind: "npm_fetch_fail_cache_miss" })).toBe("availability-skip");
   });
 
-  it("splits HTTP 400 by auth type — api-key fails closed, subscription skips", () => {
+  it("splits HTTP 400: api-key always fail-closed; subscription only skips quota/billing", () => {
     expect(classifyError({ kind: "http_400", auth: "api-key" })).toBe("fail-closed");
-    expect(classifyError({ kind: "http_400", auth: "subscription" })).toBe("availability-skip");
+    expect(classifyError({ kind: "http_400", auth: "subscription", quotaSignal: true })).toBe(
+      "availability-skip",
+    );
+    expect(classifyError({ kind: "http_400", auth: "subscription", quotaSignal: false })).toBe(
+      "fail-closed",
+    );
+    expect(classifyError({ kind: "http_400", auth: "subscription" })).toBe("fail-closed");
   });
 });
 
