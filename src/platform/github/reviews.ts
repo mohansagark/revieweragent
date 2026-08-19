@@ -2,11 +2,11 @@ import type { Octokit } from "@octokit/rest";
 import type { ReviewPort, FindingComment } from "../types.js";
 import { findReviewByMarker, bodyWithMarker } from "../../core/idempotency.js";
 
-function workflowReviewActors(): Set<string> {
-  const actors = new Set(["github-actions[bot]"]);
-  if (process.env.GITHUB_ACTOR) actors.add(process.env.GITHUB_ACTOR);
-  return actors;
-}
+// GITHUB_TOKEN reviews are always authored by github-actions[bot]. Do not
+// add GITHUB_ACTOR: on pull_request_target from a fork, that is the
+// untrusted PR author, and a forged marker comment would match as "ours"
+// then 403 on updateReview (they don't own the bot's review).
+const WORKFLOW_REVIEW_ACTOR = "github-actions[bot]";
 
 export function createGitHubReviewPort(
   octokit: Octokit,
@@ -15,18 +15,21 @@ export function createGitHubReviewPort(
 ): ReviewPort {
   return {
     async findExistingReview(pr: number, headSha: string) {
-      const reviews = (await octokit.paginate(octokit.pulls.listReviews, {
+      for await (const response of octokit.paginate.iterator(octokit.pulls.listReviews, {
         owner,
         repo,
         pull_number: pr,
         per_page: 100,
-      })) as { id: number; body?: string | null; user?: { login?: string | null } | null }[];
-      const actors = workflowReviewActors();
-      const ours = reviews
-        .filter((r) => r.user?.login != null && actors.has(r.user.login))
-        .map((r) => ({ id: r.id, body: r.body ?? "" }));
-      const match = findReviewByMarker(ours, headSha);
-      return match ? { id: match.id } : undefined;
+      })) {
+        const page = (
+          response.data as { id: number; body?: string | null; user?: { login?: string | null } | null }[]
+        )
+          .filter((r) => r.user?.login === WORKFLOW_REVIEW_ACTOR)
+          .map((r) => ({ id: r.id, body: r.body ?? "" }));
+        const match = findReviewByMarker(page, headSha);
+        if (match) return { id: match.id };
+      }
+      return undefined;
     },
 
     async createReview(

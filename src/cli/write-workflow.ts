@@ -48,6 +48,11 @@ export function buildWorkflowYaml(opts: WorkflowOptions): string {
   const { auth, shas } = opts;
   return `${WORKFLOW_MANAGED_HEADER}
 
+# run-name carries the PR head SHA so the per-actor fork cap can find the
+# revieweragent check when GitHub's Actions API leaves pull_requests empty
+# (cross-repo / forked PRs). github.sha is the fallback for issue_comment.
+run-name: revieweragent \${{ github.event.pull_request.head.sha || github.sha }}
+
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review]

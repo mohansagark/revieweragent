@@ -44,6 +44,12 @@ describe("action-interface contract", () => {
     });
   });
 
+  it("sets run-name to the PR head SHA so fork actor-cap counting works when pull_requests is empty", () => {
+    expect(yaml).toMatch(
+      /run-name:\s*revieweragent \$\{\{\s*github\.event\.pull_request\.head\.sha \|\| github\.sha\s*\}\}/,
+    );
+  });
+
   it("does not include merge_group in v1's on: block", () => {
     expect(doc.on.merge_group).toBeUndefined();
     expect(doc.on.pull_request_target).toBeDefined();

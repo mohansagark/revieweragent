@@ -11043,24 +11043,21 @@ function findReviewByMarker(reviews, headSha) {
 }
 
 // src/platform/github/reviews.ts
-function workflowReviewActors() {
-  const actors = /* @__PURE__ */ new Set(["github-actions[bot]"]);
-  if (process.env.GITHUB_ACTOR) actors.add(process.env.GITHUB_ACTOR);
-  return actors;
-}
+var WORKFLOW_REVIEW_ACTOR = "github-actions[bot]";
 function createGitHubReviewPort(octokit, owner, repo) {
   return {
     async findExistingReview(pr, headSha) {
-      const reviews = await octokit.paginate(octokit.pulls.listReviews, {
+      for await (const response of octokit.paginate.iterator(octokit.pulls.listReviews, {
         owner,
         repo,
         pull_number: pr,
         per_page: 100
-      });
-      const actors = workflowReviewActors();
-      const ours = reviews.filter((r) => r.user?.login != null && actors.has(r.user.login)).map((r) => ({ id: r.id, body: r.body ?? "" }));
-      const match2 = findReviewByMarker(ours, headSha);
-      return match2 ? { id: match2.id } : void 0;
+      })) {
+        const page = response.data.filter((r) => r.user?.login === WORKFLOW_REVIEW_ACTOR).map((r) => ({ id: r.id, body: r.body ?? "" }));
+        const match2 = findReviewByMarker(page, headSha);
+        if (match2) return { id: match2.id };
+      }
+      return void 0;
     },
     async createReview(pr, headSha, summary, comments) {
       await octokit.pulls.createReview({
@@ -11135,7 +11132,35 @@ function createGitHubCheckPort(octokit, owner, repo) {
 
 // src/platform/github/actor-rate-limit.ts
 var WORKFLOW_FILE = "revieweragent.yml";
-async function countInferenceRunsInLastHour(octokit, owner, repo, actor) {
+var RUN_NAME_PREFIX = "revieweragent ";
+var SHA_RE = /^[0-9a-f]{40}$/;
+function prHeadShaFromWorkflowRun(run) {
+  const fromPr = run.pull_requests?.[0]?.head?.sha;
+  if (fromPr && SHA_RE.test(fromPr)) return fromPr;
+  if (run.name?.startsWith(RUN_NAME_PREFIX)) {
+    const fromName = run.name.slice(RUN_NAME_PREFIX.length).trim().split(/\s+/)[0];
+    if (fromName && SHA_RE.test(fromName)) return fromName;
+  }
+  return void 0;
+}
+async function resolvePrHeadSha(octokit, owner, repo, run) {
+  const fromRun = prHeadShaFromWorkflowRun(run);
+  if (fromRun) return fromRun;
+  if (!run.head_sha) return void 0;
+  try {
+    const { data } = await octokit.repos.listPullRequestsAssociatedWithCommit({
+      owner,
+      repo,
+      commit_sha: run.head_sha,
+      per_page: 1
+    });
+    const associated = data[0]?.head?.sha;
+    return associated && SHA_RE.test(associated) ? associated : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function countInferenceRunsInLastHour(octokit, owner, repo, actor, stopAfter) {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1e3).toISOString();
   let inferenceCount = 0;
   for await (const response of octokit.paginate.iterator(octokit.actions.listWorkflowRuns, {
@@ -11148,7 +11173,7 @@ async function countInferenceRunsInLastHour(octokit, owner, repo, actor) {
     per_page: 100
   })) {
     for (const run of response.data) {
-      const prHeadSha = run.pull_requests?.[0]?.head?.sha;
+      const prHeadSha = await resolvePrHeadSha(octokit, owner, repo, run);
       if (!prHeadSha) continue;
       const { data: checks } = await octokit.checks.listForRef({
         owner,
@@ -11157,18 +11182,26 @@ async function countInferenceRunsInLastHour(octokit, owner, repo, actor) {
         check_name: JOB_NAME
       });
       if (checks.check_runs.length > 0) inferenceCount += 1;
+      if (stopAfter !== void 0 && inferenceCount >= stopAfter) return inferenceCount;
     }
   }
   return inferenceCount;
 }
 async function isUnderActorCap(octokit, owner, repo, actor, capPerHour) {
-  const count = await countInferenceRunsInLastHour(octokit, owner, repo, actor);
+  const count = await countInferenceRunsInLastHour(octokit, owner, repo, actor, capPerHour);
   return count < capPerHour;
 }
 
 // src/core/config-schema.ts
 var import_yaml = __toESM(require_dist(), 1);
 var CONFIG_SCHEMA_VERSION = 1;
+var BLOCK_SEVERITY_VALUES = [
+  "any",
+  "critical",
+  "high",
+  "medium",
+  "low"
+];
 var DEFAULT_EXCLUDE = [
   "**/package-lock.json",
   "**/yarn.lock",
@@ -11247,8 +11280,7 @@ function validateConfig(config) {
   if (config.mode !== "advisory" && config.mode !== "gate") {
     throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);
   }
-  const blockSeverities = /* @__PURE__ */ new Set(["any", "critical", "high", "medium", "low"]);
-  if (!blockSeverities.has(config.block_severity)) {
+  if (!BLOCK_SEVERITY_VALUES.includes(config.block_severity)) {
     throw new InvalidConfigError(`unsupported block_severity "${String(config.block_severity)}"`);
   }
   if (config.fork_policy !== "auto" && config.fork_policy !== "comment-gated") {
@@ -13569,7 +13601,7 @@ function classifyCliSpawnError(err, installFailed) {
 }
 function isSubscriptionQuotaMessage(text) {
   const t = text.toLowerCase();
-  return /credit|quota|billing|usage.?limit|too low/.test(t);
+  return /credit|quota|billing|usage.?limit/.test(t);
 }
 function cliInstallFailed() {
   return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";

@@ -11,6 +11,7 @@ import {
   type Mode,
   type BlockSeverity,
   type RevieweragentConfig,
+  BLOCK_SEVERITY_VALUES,
 } from "../core/config-schema.js";
 import { readCachedCredential, writeCachedCredential } from "../core/credential-cache.js";
 import { requiredDependenciesFor, runFixCommand, runGhAuthLogin, checkGitRepo } from "./dependency-checks.js";
@@ -19,7 +20,7 @@ import { validateApiKey } from "../provider/claude/api-key-credential.js";
 import { claudeProvider } from "../provider/claude/registry-entry.js";
 import { listProvidersForCategory, type PromptCategory } from "../provider/registry.js";
 import { buildWorkflowYaml, resolveWorkflowWrite, isManagedWorkflow } from "./write-workflow.js";
-import { resolveConfigWrite } from "./write-config.js";
+import { resolveConfigWrite, isManagedConfig } from "./write-config.js";
 import { printCodeownersRecommendation } from "./print-codeowners.js";
 import { printBranchProtectionInstructions } from "./print-protection-instructions.js";
 import { commitAndMaybePush } from "./commit-push.js";
@@ -67,7 +68,7 @@ export function parseNonInteractiveOptions(argv: {
   if (mode !== "advisory" && mode !== "gate") throw new MissingInputError("mode");
 
   const severity = (argv.severity as BlockSeverity | undefined) ?? "high";
-  if (!["any", "critical", "high", "medium", "low"].includes(severity)) {
+  if (!(BLOCK_SEVERITY_VALUES as readonly string[]).includes(severity)) {
     throw new MissingInputError("severity");
   }
 
@@ -246,6 +247,31 @@ export async function runInit(options: InitOptions): Promise<void> {
   const octokit = createGitHubClient(token);
   const { owner, repo } = parseOwnerRepo(getGitRemoteUrl());
 
+  const shas = loadPinnedShas();
+  const workflowYaml = buildWorkflowYaml({ auth: options.auth, shas });
+  const existingWorkflow = existsSync(WORKFLOW_PATH) ? readFileSync(WORKFLOW_PATH, "utf8") : undefined;
+  if (existingWorkflow !== undefined && isManagedWorkflow(existingWorkflow) && !options.nonInteractive) {
+    const ok = await p.confirm({ message: "Overwrite existing .github/workflows/revieweragent.yml?" });
+    if (p.isCancel(ok) || !ok) {
+      throw new Error("Init cancelled: existing workflow not overwritten.");
+    }
+  }
+  const workflowResult = resolveWorkflowWrite(WORKFLOW_PATH, existingWorkflow, workflowYaml);
+
+  const config: RevieweragentConfig = defaultConfig({
+    auth: options.auth,
+    mode: options.mode,
+    block_severity: options.severity,
+  });
+  const existingConfig = existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : undefined;
+  if (existingConfig !== undefined && isManagedConfig(existingConfig) && !options.nonInteractive) {
+    const ok = await p.confirm({ message: "Overwrite existing .revieweragent.yml?" });
+    if (p.isCancel(ok) || !ok) {
+      throw new Error("Init cancelled: existing config not overwritten.");
+    }
+  }
+  const configResult = resolveConfigWrite(CONFIG_PATH, existingConfig, config, true);
+
   const secrets = createGitHubSecretsPort(octokit, owner, repo);
   const otherAuth: AuthType = options.auth === "api-key" ? "subscription" : "api-key";
   const otherSecretName =
@@ -264,39 +290,20 @@ export async function runInit(options: InitOptions): Promise<void> {
       `Refusing to leave ${otherSecretName} in place. Confirm deletion or remove it manually, then re-run init.`,
     );
   }
+
+  const secretName =
+    options.auth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
+  // Write the new secret before touching files so a later write failure still
+  // leaves the currently-checked-in workflow pointing at a live credential.
+  // Delete the unused secret only after the new files are on disk.
+  await secrets.putSecret(secretName, options.credential);
+
+  writeFile(WORKFLOW_PATH, workflowResult.content);
+  writeFile(CONFIG_PATH, configResult.content);
+
   if (deletion === "delete") {
     await secrets.deleteSecret(otherSecretName);
   }
-  const secretName =
-    options.auth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
-  await secrets.putSecret(secretName, options.credential);
-
-  const shas = loadPinnedShas();
-  const workflowYaml = buildWorkflowYaml({ auth: options.auth, shas });
-  const existingWorkflow = existsSync(WORKFLOW_PATH) ? readFileSync(WORKFLOW_PATH, "utf8") : undefined;
-  if (existingWorkflow !== undefined && isManagedWorkflow(existingWorkflow) && !options.nonInteractive) {
-    const ok = await p.confirm({ message: "Overwrite existing .github/workflows/revieweragent.yml?" });
-    if (p.isCancel(ok) || !ok) {
-      throw new Error("Init cancelled: existing workflow not overwritten.");
-    }
-  }
-  const workflowResult = resolveWorkflowWrite(WORKFLOW_PATH, existingWorkflow, workflowYaml);
-  writeFile(WORKFLOW_PATH, workflowResult.content);
-
-  const config: RevieweragentConfig = defaultConfig({
-    auth: options.auth,
-    mode: options.mode,
-    block_severity: options.severity,
-  });
-  const existingConfig = existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf8") : undefined;
-  if (existingConfig !== undefined && !options.nonInteractive) {
-    const ok = await p.confirm({ message: "Overwrite existing .revieweragent.yml?" });
-    if (p.isCancel(ok) || !ok) {
-      throw new Error("Init cancelled: existing config not overwritten.");
-    }
-  }
-  const configResult = resolveConfigWrite(CONFIG_PATH, existingConfig, config, true);
-  writeFile(CONFIG_PATH, configResult.content);
 
   const { data: user } = await octokit.users.getAuthenticated();
   printCodeownersRecommendation(user.login);

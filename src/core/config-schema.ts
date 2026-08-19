@@ -10,6 +10,13 @@ export type AuthType = "subscription" | "api-key";
 export type Mode = "advisory" | "gate";
 export type Severity = "critical" | "high" | "medium" | "low" | "note";
 export type BlockSeverity = "any" | Exclude<Severity, "note">;
+export const BLOCK_SEVERITY_VALUES: readonly BlockSeverity[] = [
+  "any",
+  "critical",
+  "high",
+  "medium",
+  "low",
+];
 export type ForkPolicy = "auto" | "comment-gated";
 export type OnLimit = "skip" | "block";
 
@@ -118,8 +125,7 @@ function validateConfig(config: RevieweragentConfig): void {
   if (config.mode !== "advisory" && config.mode !== "gate") {
     throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);
   }
-  const blockSeverities = new Set(["any", "critical", "high", "medium", "low"]);
-  if (!blockSeverities.has(config.block_severity)) {
+  if (!(BLOCK_SEVERITY_VALUES as readonly string[]).includes(config.block_severity)) {
     throw new InvalidConfigError(`unsupported block_severity "${String(config.block_severity)}"`);
   }
   if (config.fork_policy !== "auto" && config.fork_policy !== "comment-gated") {

@@ -35,6 +35,7 @@ describe("isSubscriptionQuotaMessage", () => {
   it("does not treat a generic 400 / schema error as quota", () => {
     expect(isSubscriptionQuotaMessage("invalid json schema")).toBe(false);
     expect(isSubscriptionQuotaMessage("")).toBe(false);
+    expect(isSubscriptionQuotaMessage("parameter value too low")).toBe(false);
   });
 });
 

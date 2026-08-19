@@ -38,7 +38,7 @@ export function classifyCliSpawnError(
 
 export function isSubscriptionQuotaMessage(text: string): boolean {
   const t = text.toLowerCase();
-  return /credit|quota|billing|usage.?limit|too low/.test(t);
+  return /credit|quota|billing|usage.?limit/.test(t);
 }
 
 function cliInstallFailed(): boolean {

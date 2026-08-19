@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import * as p from "@clack/prompts";
 import { createGitHubClient, parseOwnerRepo, resolveGitHubToken } from "../platform/github/client.js";
 import { createGitHubSecretsPort } from "../platform/github/secrets.js";
-import { parseConfig } from "../core/config-schema.js";
+import { parseConfig, type AuthType } from "../core/config-schema.js";
 import { getGitRemoteUrl } from "../core/git.js";
 import { deleteManagedFiles } from "./delete-managed-files.js";
 import { deleteRepoSecret } from "./delete-secret.js";
@@ -10,6 +10,15 @@ import { deleteLocalCredentials } from "./delete-local-credentials.js";
 import { printUninstallProtectionWarning, printCommitReminder } from "./print-uninstall-warning.js";
 
 const CONFIG_PATH = ".revieweragent.yml";
+
+/** Best-effort auth lookup. Uninstall must still remove managed files if config is corrupt. */
+export function readAuthFromConfigRaw(raw: string): AuthType | undefined {
+  try {
+    return parseConfig(raw).auth;
+  } catch {
+    return undefined;
+  }
+}
 
 export class RefusedWithoutConsentError extends Error {
   constructor() {
@@ -36,7 +45,10 @@ export async function runUninstall(options: UninstallOptions): Promise<void> {
     throw new RefusedWithoutConsentError();
   }
 
-  const auth = existsSync(CONFIG_PATH) ? parseConfig(readFileSync(CONFIG_PATH, "utf8")).auth : undefined;
+  const auth = existsSync(CONFIG_PATH) ? readAuthFromConfigRaw(readFileSync(CONFIG_PATH, "utf8")) : undefined;
+  if (existsSync(CONFIG_PATH) && !auth) {
+    console.log("Could not parse .revieweragent.yml; leaving repo secrets in place.");
+  }
 
   const proceed = await confirmStep("Remove revieweragent's managed files from this repo?", options);
   if (!proceed) {

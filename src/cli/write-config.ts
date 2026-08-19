@@ -13,7 +13,8 @@ import {
 export class UnmanagedConfigConflictError extends Error {
   constructor(path: string) {
     super(
-      `${path} exists without the revieweragent managed-file header. Refusing to overwrite without confirmation.`,
+      `${path} exists without the revieweragent managed-file header. Refusing to overwrite — ` +
+        "rename or remove it manually, then re-run init.",
     );
     this.name = "UnmanagedConfigConflictError";
   }

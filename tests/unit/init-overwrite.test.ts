@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { resolveConfigWrite, UnmanagedConfigConflictError } from "../../src/cli/write-config.js";
 import { defaultConfig } from "../../src/core/config-schema.js";
 import { decideOtherSecretDeletion } from "../../src/cli/init.js";
@@ -11,6 +12,12 @@ describe("resolveConfigWrite", () => {
     expect(() =>
       resolveConfigWrite(".revieweragent.yml", "version: 1\nmode: advisory\n", defaultConfig(), true),
     ).toThrow(UnmanagedConfigConflictError);
+    expect(() =>
+      resolveConfigWrite(".revieweragent.yml", "version: 1\nmode: advisory\n", defaultConfig(), true),
+    ).toThrow(/rename or remove it manually/);
+    expect(() =>
+      resolveConfigWrite(".revieweragent.yml", "version: 1\nmode: advisory\n", defaultConfig(), true),
+    ).not.toThrow(/without confirmation/);
   });
 
   it("overwrites a managed file when confirmed", () => {
@@ -77,5 +84,38 @@ describe("printBranchProtectionInstructions", () => {
     expect(text).toContain("revieweragent");
     expect(text.toLowerCase()).toContain("until you require");
     expect(text).not.toMatch(/Do this now and every PR merges/);
+  });
+});
+
+describe("runInit mutation order", () => {
+  const runInitSrc = () => {
+    const src = readFileSync("src/cli/init.ts", "utf8");
+    const start = src.indexOf("export async function runInit");
+    const end = src.indexOf("\nfunction writeFile");
+    return src.slice(start, end);
+  };
+
+  it("plans file overwrites before putting or deleting secrets", () => {
+    const src = runInitSrc();
+    const resolveWorkflow = src.indexOf("resolveWorkflowWrite");
+    const resolveConfig = src.indexOf("resolveConfigWrite");
+    const putSecret = src.indexOf("putSecret");
+    const deleteSecret = src.indexOf("deleteSecret");
+    expect(resolveWorkflow).toBeGreaterThan(-1);
+    expect(resolveConfig).toBeGreaterThan(-1);
+    expect(putSecret).toBeGreaterThan(resolveWorkflow);
+    expect(putSecret).toBeGreaterThan(resolveConfig);
+    expect(deleteSecret).toBeGreaterThan(putSecret);
+  });
+
+  it("prompts for managed overwrites before mutating secrets", () => {
+    const src = runInitSrc();
+    const workflowPrompt = src.indexOf("Overwrite existing .github/workflows/revieweragent.yml?");
+    const configPrompt = src.indexOf("Overwrite existing .revieweragent.yml?");
+    const putSecret = src.indexOf("putSecret");
+    expect(workflowPrompt).toBeGreaterThan(-1);
+    expect(configPrompt).toBeGreaterThan(-1);
+    expect(putSecret).toBeGreaterThan(workflowPrompt);
+    expect(putSecret).toBeGreaterThan(configPrompt);
   });
 });
