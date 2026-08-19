@@ -1,50 +1,141 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+Version change: none (unratified template) → 1.0.0
+Modified principles: n/a (initial ratification)
+Added sections: Core Principles (I–VI), Security & Sanitization Requirements,
+  Development Workflow, Governance
+Removed sections: none
+Deferred placeholders: RATIFICATION_DATE set to today (2026-08-19); no
+  prior ratification exists — this is the first constitution write.
+Templates requiring follow-up: none — plan/spec/tasks templates read this
+  file at runtime and need no edits for this change.
+-->
+
+# revieweragent Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Spec Is the Source of Truth
+`SPEC.md` at the repo root is the locked design. Every mechanism it
+documents (CLI flags, API endpoints, error classification, schemas) has
+been verified against source or an OpenAPI description, not assumed. No
+implementation MAY silently diverge from `SPEC.md`. If reality forces a
+divergence, `SPEC.md` MUST be updated in the same change — code and spec
+never drift apart silently.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+**Rationale**: The spec exists precisely because earlier drafts contained
+unverified "if the API supports it" language that cost rework. Treating it
+as authoritative, not aspirational, is what keeps that from repeating.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### II. v1 Scope Discipline (NON-NEGOTIABLE)
+Only `init`, `review`, and `uninstall` ship in v1, per `SPEC.md` §0.
+`upgrade`, `rotate-secret`, `apply-protection`, `merge_group` handling,
+keychain storage, automatic CODEOWNERS writing, and tuned fork rate
+limiting are explicitly deferred — building them before v1 ships is a
+constitution violation, not ambition. Branch protection stays a printed
+manual step in v1; auto-apply is later work.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+**Rationale**: `SPEC.md` §0 slices the product down to the smallest thing
+that answers "are the reviews any good?" — every command beyond that is
+scaffolding that delays the only feedback that matters.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### III. Fail-Closed Security, Availability-Skip Reliability
+Auth failures (expired token, 401, 403) MUST fail closed in gate mode —
+never silently pass a PR. Transient/provider failures (429, 400 credit,
+overload, 5xx) MUST be classified as availability skip, not fail-closed,
+and MUST NOT block merges. This distinction is locked in `SPEC.md` §9/§11
+and MUST be preserved in every error path the runner adds.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+**Rationale**: Conflating "we couldn't reach the model" with "the model
+found a problem" either blocks merges on a provider outage or, worse,
+silently waves PRs through on an auth failure. Neither is acceptable.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### IV. Untrusted Input Is Never Instruction
+PR titles, bodies, filenames, diffs, review threads, and issue comments
+are untrusted data, always wrapped in delimiters, never treated as
+instructions to the model. The runner sanitizes untrusted text (HTML
+comments, invisible characters, markdown image alt-text, hidden HTML
+attributes, HTML entities) before every API call, per `SPEC.md` §10.
+Sanitization is defense-in-depth, not the primary control — the primary
+controls are structural: no tools, no PR-head checkout, config sourced
+from the base branch, and a code-side gate the model cannot influence.
+`instructions.md` may add review policy; it MUST NOT be able to disable
+schema validation or the code-side gate.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+**Rationale**: This is a GitHub Action that ingests attacker-controlled PR
+content by design. Every other guarantee in the system is void if this one
+breaks.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+### V. Code Decides, the Model Only Reports
+The model returns findings only (severity, file, line, message) — never a
+verdict. Pass/block is computed in code from `block_severity` config
+against the findings array, per `SPEC.md` §12. If a `verdict` key appears
+in model output anyway, it MUST be ignored. Schema violations are treated
+as infra failures, not silently coerced.
+
+**Rationale**: A model-computed verdict is exactly the kind of instruction
+a prompt injection would target. Keeping the gate deterministic and
+code-owned removes that attack surface entirely.
+
+### VI. Decoupled, Verified Dependencies
+revieweragent does not depend on `anthropics/claude-code-action` at
+runtime — it bundles its own review runner, a decision justified by the
+actor-permission gate, not a false technical claim (locked in `SPEC.md`
+§7). Where that action's prior art is genuinely reusable (its sanitizer
+design, §10), read and adapt it explicitly rather than re-deriving it
+worse. Every third-party API or CLI behavior this project depends on MUST
+be verified against source/OpenAPI before being written into spec or code
+— "the docs probably say" is not a verification.
+
+**Rationale**: This project already reversed course once after finding an
+unverified assumption baked into an early design. The cost of verification
+is small next to the cost of shipping on a wrong assumption a second time.
+
+## Security & Sanitization Requirements
+
+- One auth secret per repo (`REVIEWERAGENT_ANTHROPIC_API_KEY` or
+  `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`), never both live at once.
+  Switching auth deletes the unused secret after confirmation.
+- Secrets are never echoed to logs; debug paths MUST mask them.
+- Workflow triggers use a single `on:` block — no `pull_request` /
+  `pull_request_target` mixing (`SPEC.md` §9).
+- Fork PRs are subject to the `auto` rate-limit policy by default; no
+  unbounded fork-triggered spend.
+- Findings render as GitHub Reviews API inline comments keyed on
+  `file`/`line`, not free text alone — this keeps the gate auditable.
+
+## Development Workflow
+
+- Every feature or fix traces back to a numbered `SPEC.md` section; cite
+  it in the PR description.
+- Any CLI or API behavior newly relied upon during implementation MUST be
+  verified (tested against a real invocation or checked against an
+  OpenAPI/source reference) before it is treated as fact — matching the
+  verification bar `SPEC.md` itself was held to.
+- Changes that touch the fail-closed/availability-skip classification
+  (Principle III) or the sanitization boundary (Principle IV) require
+  explicit call-out in review; these are the two places a quiet regression
+  is most dangerous.
+- v1/Later scope (Principle II) is enforced at planning time: `/speckit-plan`
+  and `/speckit-tasks` MUST NOT schedule deferred-scope work ahead of the
+  three v1 commands without an explicit constitution amendment.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes ad hoc practice for this repository. `SPEC.md`
+governs product mechanism and behavior; this constitution governs how work
+proceeds against that spec — the two are complementary, not duplicates.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+Amendments require: the proposed change written out, its principle-level
+impact classified (MAJOR/MINOR/PATCH per the versioning policy below), and
+the Sync Impact Report at the top of this file updated in the same commit.
+Removing or redefining a principle is a MAJOR bump; adding a principle or
+materially expanding guidance is MINOR; wording/clarification is PATCH.
+
+All plans and PRs are expected to be compliant with this constitution.
+Any deviation must be justified in the PR description and, if it recurs,
+resolved by amending this document rather than left as a standing
+exception. Runtime development guidance for agents lives in `SPEC.md` and
+the `.specify/` templates, not duplicated here.
+
+**Version**: 1.0.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-19
