@@ -155,7 +155,7 @@ managed files/secret are gone per marker rules (quickstart.md Scenario C)
 - [X] T044 [P] Unit tests for the safety-critical modules — `gate-evaluator.ts`, `sanitizer.ts`, `error-classifier.ts`, `idempotency.ts` (Constitution Principles III–V; SPEC §9/§10/§12/§14 scenarios) in `tests/unit/`
 - [X] T045 [P] Contract tests validating the implementation against `contracts/findings-schema.json`, `contracts/revieweragent-config-schema.md`, and `contracts/action-interface.md` in `tests/contract/`
 - [X] T046 [P] Integration tests using simulated GitHub event fixtures — draft PR, fork PR (auto and comment-gated), non-write commenter, retry/duplicate `synchronize`, over-limit diff (spec.md Edge Cases + Acceptance Scenarios) in `tests/integration/`
-- [ ] T047 Run `quickstart.md` Scenarios A, B, C end to end against a disposable real GitHub repo
+- [X] T047 Run `quickstart.md` Scenarios A, B, C end to end against a disposable real GitHub repo
 - [X] T048 [P] Fill in package metadata for npm publish — `files` whitelist, `bin`, `repository`, `engines.node >=20` in `package.json`
 - [X] T049 Security hardening pass — confirm credentials are never logged, masked on any debug path, and the exactly-one-credential invariant holds end to end across `init`/`review`/`uninstall` (SPEC §11, Constitution Security & Sanitization Requirements)
 
