@@ -103,3 +103,44 @@ describe("action-interface contract", () => {
     expect(actionYaml).toContain("dist/index.js");
   });
 });
+
+describe("subscription auth installs the pinned Claude CLI", () => {
+  // Real bug found in manual testing: this install step didn't exist at
+  // all. spawn("claude", ...) failed with ENOENT on every real run (no
+  // fresh runner has it preinstalled), silently misclassified as an
+  // availability skip, reporting a false "pass" with the model never
+  // actually called (specs/001-v1-core-commands/contracts uses SPEC.md
+  // §7/§8's "CI uses a pinned copy" requirement, which had no
+  // implementation until this fix).
+  const subscriptionYaml = buildWorkflowYaml({
+    auth: "subscription",
+    shas: {
+      checkoutSha: "a".repeat(40),
+      reviewActionSha: "b".repeat(40),
+      actionOwner: "revieweragent-org",
+      actionRepo: "revieweragent",
+    },
+  });
+  const subDoc = parseYaml(subscriptionYaml);
+  const subJob = subDoc.jobs[WORKFLOW_JOB_ID];
+
+  it("installs @anthropic-ai/claude-code globally before the review step", () => {
+    expect(subJob.steps).toHaveLength(3);
+    expect(subJob.steps[1].run).toMatch(/npm install -g @anthropic-ai\/claude-code@\d+\.\d+\.\d+/);
+  });
+
+  it("does not install the CLI for api-key auth — it never needs it", () => {
+    const apiKeyYaml = buildWorkflowYaml({
+      auth: "api-key",
+      shas: {
+        checkoutSha: "a".repeat(40),
+        reviewActionSha: "b".repeat(40),
+        actionOwner: "revieweragent-org",
+        actionRepo: "revieweragent",
+      },
+    });
+    const apiKeyJob = parseYaml(apiKeyYaml).jobs[WORKFLOW_JOB_ID];
+    expect(apiKeyJob.steps).toHaveLength(2);
+    expect(apiKeyJob.steps.some((s: { run?: string }) => s.run?.includes("claude-code"))).toBe(false);
+  });
+});

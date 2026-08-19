@@ -11215,6 +11215,7 @@ function parseConfig(raw) {
   }
   return { ...defaultConfig(), ...obj };
 }
+var MANAGED_HEADER_LINE = MANAGED_HEADER.split("\n")[0];
 
 // src/cli/review-event-context.ts
 import { readFileSync } from "node:fs";
@@ -13700,6 +13701,7 @@ async function reportOutcome(octokit, owner, repo, headSha, kind, mode, summary,
   const outcome = checkOutcomeFor(kind, mode);
   const checks = createGitHubCheckPort(octokit, owner, repo);
   const title = outcome.titlePrefix ? `${outcome.titlePrefix} ${kind}` : kind;
+  console.log(`revieweragent: ${kind} -> ${outcome.conclusion} (exit ${outcome.exitCode})`);
   await checks.upsertCheck(headSha, outcome.conclusion, title, summary);
   return outcome.exitCode;
 }

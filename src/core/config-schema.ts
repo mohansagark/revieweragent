@@ -123,7 +123,14 @@ export function serializeConfig(
     for (const [key, value] of Object.entries(config)) {
       doc.set(key, value);
     }
-    return `${MANAGED_HEADER}\n${doc.toString()}`;
+    // Real bug found in manual testing: MANAGED_HEADER is a YAML comment,
+    // so parseDocument() preserves it as a leading comment on the
+    // round-tripped document — doc.toString() already includes it. Simply
+    // prepending MANAGED_HEADER again stacked a fresh copy on every
+    // re-run. Strip any already-present copies (however many accumulated
+    // from prior buggy runs) before adding exactly one back.
+    const withoutHeader = stripLeadingManagedHeader(doc.toString());
+    return `${MANAGED_HEADER}\n${withoutHeader}`;
   }
 
   const doc = new Document(config);
@@ -132,4 +139,13 @@ export function serializeConfig(
 
 export function isManagedConfig(raw: string): boolean {
   return raw.includes(MANAGED_MARKER);
+}
+
+const MANAGED_HEADER_LINE = MANAGED_HEADER.split("\n")[0]!;
+
+function stripLeadingManagedHeader(raw: string): string {
+  const lines = raw.split("\n");
+  let start = 0;
+  while (lines[start] === MANAGED_HEADER_LINE) start += 1;
+  return lines.slice(start).join("\n");
 }

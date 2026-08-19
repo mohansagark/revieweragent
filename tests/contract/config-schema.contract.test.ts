@@ -30,6 +30,22 @@ describe(".revieweragent.yml contract", () => {
     expect(() => serializeConfig(config, "not: valid: yaml: at: all: ][")).toThrow(InvalidConfigYamlError);
   });
 
+  it("regression: repeated re-serialization never stacks duplicate managed headers", () => {
+    // Real bug found in manual testing: MANAGED_HEADER is a YAML comment,
+    // so parseDocument() preserves it as part of the round-tripped
+    // document — serializeConfig was prepending a fresh copy on top of
+    // that on every call, so N re-runs of `init` against the same repo
+    // left N copies of the header stacked at the top of the committed
+    // file.
+    let yaml = serializeConfig(defaultConfig());
+    for (let i = 0; i < 5; i++) {
+      yaml = serializeConfig(defaultConfig({ mode: i % 2 === 0 ? "gate" : "advisory" }), yaml);
+    }
+    const headerOccurrences = yaml.split("Managed by revieweragent").length - 1;
+    expect(headerOccurrences).toBe(1);
+    expect(parseConfig(yaml).mode).toBe("gate");
+  });
+
   it("preserves unknown keys when merging into an existing managed file", () => {
     const existing = [
       "# Managed by revieweragent — schema version below is required.",

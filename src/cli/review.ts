@@ -208,6 +208,11 @@ async function reportOutcome(
   const outcome = checkOutcomeFor(kind, mode);
   const checks = createGitHubCheckPort(octokit, owner, repo);
   const title = outcome.titlePrefix ? `${outcome.titlePrefix} ${kind}` : kind;
+  // Debuggability gap found in manual testing: every outcome path funnels
+  // through here, but nothing logged what actually happened — a silent
+  // availability-skip (e.g. the CLI-not-found ENOENT bug) was
+  // indistinguishable from a genuine PASS in the run log.
+  console.log(`revieweragent: ${kind} -> ${outcome.conclusion} (exit ${outcome.exitCode})`);
   await checks.upsertCheck(headSha, outcome.conclusion, title, summary);
   return outcome.exitCode;
 }

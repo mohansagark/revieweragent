@@ -24,6 +24,15 @@ export const WORKFLOW_MARKER = "Managed by revieweragent";
 export const JOB_NAME = "revieweragent";
 export const WORKFLOW_JOB_ID = "revieweragent-run";
 
+// SPEC.md §7/§8: "CI uses a pinned copy, not the operator's global CLI."
+// Real bug found in manual testing: this install step didn't exist at
+// all — the subscription backend spawned `claude` assuming it was
+// already on PATH, which it never is on a fresh runner. The spawn failed
+// with ENOENT, silently misclassified as an availability-skip (no
+// logging), and reported a false "pass" — the model was never actually
+// called. Version matches the CLI build SPEC.md §8 verified end-to-end.
+export const CLAUDE_CLI_VERSION = "2.1.235";
+
 export interface WorkflowOptions {
   auth: AuthType;
   shas: PinnedShas;
@@ -68,10 +77,21 @@ jobs:
       - uses: actions/checkout@${shas.checkoutSha}
         with:
           persist-credentials: false
-      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
+${claudeCliInstallStep(auth)}      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
 ${credentialEnvLine(auth)}
+`;
+}
+
+function claudeCliInstallStep(auth: AuthType): string {
+  if (auth !== "subscription") return "";
+  // Cache miss + npm install failure is an availability skip, not
+  // fail-closed (SPEC.md §7/§9) — a bad npm registry day must not freeze
+  // merges. That classification happens in subscription.ts's spawn
+  // error handler once `claude` genuinely isn't found; this step just
+  // makes the common case (npm succeeds) actually put it on PATH.
+  return `      - run: npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}
 `;
 }
 
