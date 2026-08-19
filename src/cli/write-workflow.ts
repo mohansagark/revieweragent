@@ -81,17 +81,23 @@ ${claudeCliInstallStep(auth)}      - uses: ${shas.actionOwner}/${shas.actionRepo
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
 ${credentialEnvLine(auth)}
-`;
+${subscriptionInstallEnv(auth)}`;
 }
 
 function claudeCliInstallStep(auth: AuthType): string {
   if (auth !== "subscription") return "";
-  // Cache miss + npm install failure is an availability skip, not
-  // fail-closed (SPEC.md §7/§9) — a bad npm registry day must not freeze
-  // merges. That classification happens in subscription.ts's spawn
-  // error handler once `claude` genuinely isn't found; this step just
-  // makes the common case (npm succeeds) actually put it on PATH.
-  return `      - run: npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}
+  // continue-on-error: SPEC.md §7/§9 — npm install failure is an
+  // availability skip, not fail-closed. The review step reads
+  // REVIEWERAGENT_CLI_INSTALL_FAILED and classifies ENOENT accordingly.
+  return `      - id: install-claude
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}
+`;
+}
+
+function subscriptionInstallEnv(auth: AuthType): string {
+  if (auth !== "subscription") return "";
+  return `          REVIEWERAGENT_CLI_INSTALL_FAILED: \${{ steps.install-claude.outcome == 'failure' }}
 `;
 }
 

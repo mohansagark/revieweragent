@@ -6,6 +6,7 @@ import {
   CONFIG_SCHEMA_VERSION,
   UnrecognizedConfigVersionError,
   InvalidConfigYamlError,
+  InvalidConfigError,
 } from "../../src/core/config-schema.js";
 
 // Validates behavior documented in
@@ -44,6 +45,23 @@ describe(".revieweragent.yml contract", () => {
     const headerOccurrences = yaml.split("Managed by revieweragent").length - 1;
     expect(headerOccurrences).toBe(1);
     expect(parseConfig(yaml).mode).toBe("gate");
+  });
+
+  it("fail-closes on invalid enums rather than silently PASSing the gate", () => {
+    const yaml = [
+      "version: 1",
+      "provider: claude",
+      "auth: subscription",
+      "mode: advisory",
+      "block_severity: hgih",
+    ].join("\n");
+    expect(() => parseConfig(yaml)).toThrow(InvalidConfigError);
+  });
+
+  it("fail-closes on unknown mode/auth/fork_policy", () => {
+    expect(() => parseConfig("version: 1\nmode: gte\n")).toThrow(InvalidConfigError);
+    expect(() => parseConfig("version: 1\nauth: oauth\n")).toThrow(InvalidConfigError);
+    expect(() => parseConfig("version: 1\nfork_policy: everyone\n")).toThrow(InvalidConfigError);
   });
 
   it("preserves unknown keys when merging into an existing managed file", () => {

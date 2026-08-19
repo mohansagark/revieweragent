@@ -127,6 +127,14 @@ describe("subscription auth installs the pinned Claude CLI", () => {
   it("installs @anthropic-ai/claude-code globally before the review step", () => {
     expect(subJob.steps).toHaveLength(3);
     expect(subJob.steps[1].run).toMatch(/npm install -g @anthropic-ai\/claude-code@\d+\.\d+\.\d+/);
+    expect(subJob.steps[1]["continue-on-error"]).toBe(true);
+  });
+
+  it("passes install failure into the review step so npm outage can availability-skip", () => {
+    const review = subJob.steps[2];
+    expect(review.env.REVIEWERAGENT_CLI_INSTALL_FAILED).toBeDefined();
+    expect(review.env.CLAUDE_CODE_OAUTH_TOKEN).toBeDefined();
+    expect(review.env.GITHUB_TOKEN).toBeDefined();
   });
 
   it("does not install the CLI for api-key auth — it never needs it", () => {

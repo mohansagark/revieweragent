@@ -11043,11 +11043,24 @@ function findReviewByMarker(reviews, headSha) {
 }
 
 // src/platform/github/reviews.ts
+function workflowReviewActors() {
+  const actors = /* @__PURE__ */ new Set(["github-actions[bot]"]);
+  if (process.env.GITHUB_ACTOR) actors.add(process.env.GITHUB_ACTOR);
+  return actors;
+}
 function createGitHubReviewPort(octokit, owner, repo) {
   return {
     async findExistingReview(pr, headSha) {
-      const { data } = await octokit.pulls.listReviews({ owner, repo, pull_number: pr });
-      return findReviewByMarker(data, headSha);
+      const reviews = await octokit.paginate(octokit.pulls.listReviews, {
+        owner,
+        repo,
+        pull_number: pr,
+        per_page: 100
+      });
+      const actors = workflowReviewActors();
+      const ours = reviews.filter((r) => r.user?.login != null && actors.has(r.user.login)).map((r) => ({ id: r.id, body: r.body ?? "" }));
+      const match2 = findReviewByMarker(ours, headSha);
+      return match2 ? { id: match2.id } : void 0;
     },
     async createReview(pr, headSha, summary, comments) {
       await octokit.pulls.createReview({
@@ -11124,7 +11137,8 @@ function createGitHubCheckPort(octokit, owner, repo) {
 var WORKFLOW_FILE = "revieweragent.yml";
 async function countInferenceRunsInLastHour(octokit, owner, repo, actor) {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1e3).toISOString();
-  const { data } = await octokit.actions.listWorkflowRuns({
+  let inferenceCount = 0;
+  for await (const response of octokit.paginate.iterator(octokit.actions.listWorkflowRuns, {
     owner,
     repo,
     workflow_id: WORKFLOW_FILE,
@@ -11132,18 +11146,18 @@ async function countInferenceRunsInLastHour(octokit, owner, repo, actor) {
     event: "pull_request_target",
     created: `>${oneHourAgo}`,
     per_page: 100
-  });
-  let inferenceCount = 0;
-  for (const run of data.workflow_runs) {
-    const headSha = run.head_sha;
-    if (!headSha) continue;
-    const { data: checks } = await octokit.checks.listForRef({
-      owner,
-      repo,
-      ref: headSha,
-      check_name: JOB_NAME
-    });
-    if (checks.check_runs.length > 0) inferenceCount += 1;
+  })) {
+    for (const run of response.data) {
+      const prHeadSha = run.pull_requests?.[0]?.head?.sha;
+      if (!prHeadSha) continue;
+      const { data: checks } = await octokit.checks.listForRef({
+        owner,
+        repo,
+        ref: prHeadSha,
+        check_name: JOB_NAME
+      });
+      if (checks.check_runs.length > 0) inferenceCount += 1;
+    }
   }
   return inferenceCount;
 }
@@ -11201,6 +11215,12 @@ var InvalidConfigYamlError = class extends Error {
     this.name = "InvalidConfigYamlError";
   }
 };
+var InvalidConfigError = class extends Error {
+  constructor(message) {
+    super(`.revieweragent.yml is invalid: ${message}`);
+    this.name = "InvalidConfigError";
+  }
+};
 function parseConfig(raw) {
   let doc;
   try {
@@ -11213,7 +11233,45 @@ function parseConfig(raw) {
   if (obj.version !== CONFIG_SCHEMA_VERSION) {
     throw new UnrecognizedConfigVersionError(obj.version);
   }
-  return { ...defaultConfig(), ...obj };
+  const config = { ...defaultConfig(), ...obj };
+  validateConfig(config);
+  return config;
+}
+function validateConfig(config) {
+  if (config.provider !== "claude") {
+    throw new InvalidConfigError(`unsupported provider "${String(config.provider)}"`);
+  }
+  if (config.auth !== "subscription" && config.auth !== "api-key") {
+    throw new InvalidConfigError(`unsupported auth "${String(config.auth)}"`);
+  }
+  if (config.mode !== "advisory" && config.mode !== "gate") {
+    throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);
+  }
+  const blockSeverities = /* @__PURE__ */ new Set(["any", "critical", "high", "medium", "low"]);
+  if (!blockSeverities.has(config.block_severity)) {
+    throw new InvalidConfigError(`unsupported block_severity "${String(config.block_severity)}"`);
+  }
+  if (config.fork_policy !== "auto" && config.fork_policy !== "comment-gated") {
+    throw new InvalidConfigError(`unsupported fork_policy "${String(config.fork_policy)}"`);
+  }
+  if (config.on_limit !== "skip" && config.on_limit !== "block") {
+    throw new InvalidConfigError(`unsupported on_limit "${String(config.on_limit)}"`);
+  }
+  if (typeof config.max_diff_lines !== "number" || !Number.isFinite(config.max_diff_lines) || config.max_diff_lines < 1) {
+    throw new InvalidConfigError("max_diff_lines must be a positive number");
+  }
+  if (typeof config.max_prompt_tokens !== "number" || !Number.isFinite(config.max_prompt_tokens) || config.max_prompt_tokens < 1) {
+    throw new InvalidConfigError("max_prompt_tokens must be a positive number");
+  }
+  if (typeof config.max_fork_reviews_per_actor_per_hour !== "number" || !Number.isFinite(config.max_fork_reviews_per_actor_per_hour) || config.max_fork_reviews_per_actor_per_hour < 0) {
+    throw new InvalidConfigError("max_fork_reviews_per_actor_per_hour must be a non-negative number");
+  }
+  if (typeof config.trigger_phrase !== "string" || config.trigger_phrase.length === 0) {
+    throw new InvalidConfigError("trigger_phrase must be a non-empty string");
+  }
+  if (!Array.isArray(config.exclude) || config.exclude.some((g) => typeof g !== "string")) {
+    throw new InvalidConfigError("exclude must be an array of strings");
+  }
 }
 var MANAGED_HEADER_LINE = MANAGED_HEADER.split("\n")[0];
 
@@ -11244,7 +11302,9 @@ async function resolveEventContext(octokit, owner, repo) {
       baseSha: pr.base.sha,
       isDraft: pr.draft,
       isFork,
-      prAuthorLogin: pr.user.login
+      prAuthorLogin: pr.user.login,
+      title: pr.title ?? "",
+      body: pr.body ?? ""
     };
   }
   if (eventName === "issue_comment") {
@@ -11263,6 +11323,8 @@ async function resolveEventContext(octokit, owner, repo) {
       isDraft: pr.draft ?? false,
       isFork,
       prAuthorLogin: pr.user?.login ?? "",
+      title: pr.title ?? "",
+      body: pr.body ?? "",
       commentBody: payload.comment.body,
       commenterLogin: payload.comment.user.login
     };
@@ -11272,12 +11334,18 @@ async function resolveEventContext(octokit, owner, repo) {
 
 // src/cli/review-skip-rules.ts
 async function hasWriteAccess(octokit, owner, repo, username) {
-  const { data } = await octokit.repos.getCollaboratorPermissionLevel({
-    owner,
-    repo,
-    username
-  });
-  return data.permission === "write" || data.permission === "admin";
+  try {
+    const { data } = await octokit.repos.getCollaboratorPermissionLevel({
+      owner,
+      repo,
+      username
+    });
+    return data.permission === "admin" || data.permission === "maintain" || data.permission === "write";
+  } catch (err) {
+    const status = err.status;
+    if (status === 404 || status === 403) return false;
+    throw err;
+  }
 }
 async function decideSkip(octokit, owner, repo, ctx, config) {
   if (ctx.eventName === "pull_request_target") {
@@ -13246,10 +13314,13 @@ var UNTRUSTED_DATA_OPEN = "<UNTRUSTED_PR_DATA>";
 var UNTRUSTED_DATA_CLOSE = "</UNTRUSTED_PR_DATA>";
 function wrapUntrustedData(fields) {
   const body = Object.entries(fields).map(([key, value]) => `${key}:
-${sanitize(value)}`).join("\n\n");
+${stripDelimiterTokens(sanitize(value))}`).join("\n\n");
   return `${UNTRUSTED_DATA_OPEN}
 ${body}
 ${UNTRUSTED_DATA_CLOSE}`;
+}
+function stripDelimiterTokens(text) {
+  return text.split(UNTRUSTED_DATA_OPEN).join("").split(UNTRUSTED_DATA_CLOSE).join("");
 }
 
 // src/core/system-prompt.ts
@@ -13382,6 +13453,7 @@ function evaluateGate(findings, blockSeverity) {
 function classifyError(err) {
   switch (err.kind) {
     case "missing_secret":
+    case "cli_missing":
     case "http_401":
     case "http_403":
     case "invalid_json":
@@ -13391,7 +13463,8 @@ function classifyError(err) {
     case "npm_fetch_fail_cache_miss":
       return "availability-skip";
     case "http_400":
-      return err.auth === "api-key" ? "fail-closed" : "availability-skip";
+      if (err.auth === "api-key") return "fail-closed";
+      return err.quotaSignal ? "availability-skip" : "fail-closed";
   }
 }
 function checkOutcomeFor(kind, mode) {
@@ -13415,6 +13488,72 @@ function checkOutcomeFor(kind, mode) {
   }
 }
 
+// src/core/review-payload.ts
+function formatFilePatches(files) {
+  return files.map((f) => `diff --git a/${f.filename} b/${f.filename}
+--- a/${f.filename}
++++ b/${f.filename}
+${f.patch ?? ""}`).join("\n");
+}
+function rightSideLines(patch) {
+  const lines = /* @__PURE__ */ new Set();
+  let newLine = 0;
+  for (const raw of patch.split("\n")) {
+    const header = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (header) {
+      newLine = Number(header[1]);
+      continue;
+    }
+    if (raw.startsWith("\\")) continue;
+    if (raw.startsWith("-")) continue;
+    if (raw.startsWith("+")) {
+      lines.add(newLine);
+      newLine += 1;
+      continue;
+    }
+    if (raw.startsWith(" ") || raw === "") {
+      if (newLine > 0) {
+        lines.add(newLine);
+        newLine += 1;
+      }
+    }
+  }
+  return lines;
+}
+function commentsInDiff(files, comments) {
+  const byFile = /* @__PURE__ */ new Map();
+  for (const file of files) {
+    byFile.set(file.filename, rightSideLines(file.patch ?? ""));
+  }
+  return comments.filter((c) => byFile.get(c.path)?.has(c.line) === true);
+}
+
+// src/cli/review-outcome.ts
+async function publishCheckAndReview(opts) {
+  const outcome = checkOutcomeFor(opts.kind, opts.mode);
+  const title = outcome.titlePrefix ? `${outcome.titlePrefix} ${opts.kind}` : opts.kind;
+  console.log(`revieweragent: ${opts.kind} -> ${outcome.conclusion} (exit ${outcome.exitCode})`);
+  try {
+    const existing = await opts.reviews.findExistingReview(opts.prNumber, opts.headSha);
+    if (existing) {
+      await opts.reviews.updateReview(existing.id, opts.prNumber, opts.headSha, opts.summary);
+    } else {
+      await opts.reviews.createReview(opts.prNumber, opts.headSha, opts.summary, opts.comments ?? []);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await opts.checks.upsertCheck(
+      opts.headSha,
+      "failure",
+      "fail-closed-infra",
+      `Reviews API failed: ${message}`
+    );
+    throw err;
+  }
+  await opts.checks.upsertCheck(opts.headSha, outcome.conclusion, title, opts.summary);
+  return outcome.exitCode;
+}
+
 // src/provider/claude/subscription.ts
 import { spawn } from "node:child_process";
 var ModelBackendError = class extends Error {
@@ -13424,7 +13563,23 @@ var ModelBackendError = class extends Error {
     this.name = "ModelBackendError";
   }
 };
+function classifyCliSpawnError(err, installFailed) {
+  if (installFailed) return { kind: "npm_fetch_fail_cache_miss" };
+  return { kind: "cli_missing" };
+}
+function isSubscriptionQuotaMessage(text) {
+  const t = text.toLowerCase();
+  return /credit|quota|billing|usage.?limit|too low/.test(t);
+}
+function cliInstallFailed() {
+  return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
+}
 function callSubscriptionBackend(systemPrompt, userPayload, claudeBin = "claude") {
+  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return Promise.reject(
+      new ModelBackendError("CLAUDE_CODE_OAUTH_TOKEN is not set", { kind: "missing_secret" })
+    );
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(
       claudeBin,
@@ -13452,9 +13607,10 @@ function callSubscriptionBackend(systemPrompt, userPayload, claudeBin = "claude"
     child.stderr.on("data", (chunk) => stderr += chunk.toString("utf8"));
     child.on("error", (err) => {
       reject(
-        new ModelBackendError(`Failed to spawn claude CLI: ${err.message}`, {
-          kind: "npm_fetch_fail_cache_miss"
-        })
+        new ModelBackendError(
+          `Failed to spawn claude CLI: ${err.message}`,
+          classifyCliSpawnError(err, cliInstallFailed())
+        )
       );
     });
     child.on("exit", () => {
@@ -13480,7 +13636,16 @@ function callSubscriptionBackend(systemPrompt, userPayload, claudeBin = "claude"
           return;
         }
         if (status === 400) {
-          reject(new ModelBackendError("Claude Code plan-quota error", { kind: "http_400", auth: "subscription" }));
+          const blob = `${JSON.stringify(envelope)}
+${stderr}`;
+          const quotaSignal = isSubscriptionQuotaMessage(blob);
+          reject(
+            new ModelBackendError(quotaSignal ? "Claude Code plan-quota error" : "Claude Code HTTP 400", {
+              kind: "http_400",
+              auth: "subscription",
+              quotaSignal
+            })
+          );
           return;
         }
         if (status && status >= 500) {
@@ -13519,7 +13684,10 @@ async function callApiKeyBackend(systemPrompt, userPayload, apiKey = process.env
       body: JSON.stringify({
         model: DEFAULT_MODEL,
         max_tokens: 4096,
-        system: systemPrompt,
+        system: `${systemPrompt}
+
+Findings JSON schema:
+${JSON.stringify(FINDINGS_JSON_SCHEMA)}`,
         messages: [{ role: "user", content: userPayload }]
       })
     });
@@ -13572,6 +13740,8 @@ async function runReview() {
     return 1;
   }
   const octokit = createGitHubClient(token);
+  const checks = createGitHubCheckPort(octokit, owner, repo);
+  const reviews = createGitHubReviewPort(octokit, owner, repo);
   let ctx;
   try {
     ctx = await resolveEventContext(octokit, owner, repo);
@@ -13582,16 +13752,26 @@ async function runReview() {
     }
     throw err;
   }
+  const publish = (kind, mode, summary, comments) => publishCheckAndReview({
+    checks,
+    reviews,
+    prNumber: ctx.prNumber,
+    headSha: ctx.headSha,
+    kind,
+    mode,
+    summary,
+    comments
+  });
   if (!existsSync(CONFIG_PATH)) {
     console.error(`${CONFIG_PATH} not found on the base branch.`);
-    return 1;
+    return await publish("fail-closed-infra", "gate", `${CONFIG_PATH} not found on the base branch.`);
   }
   let config;
   try {
     config = parseConfig(readFileSync2(CONFIG_PATH, "utf8"));
   } catch (err) {
-    if (err instanceof InvalidConfigYamlError || err instanceof UnrecognizedConfigVersionError) {
-      return await reportOutcome(octokit, owner, repo, ctx.headSha, "fail-closed-infra", "advisory", err.message);
+    if (err instanceof InvalidConfigYamlError || err instanceof UnrecognizedConfigVersionError || err instanceof InvalidConfigError) {
+      return await publish("fail-closed-infra", "gate", err.message);
     }
     throw err;
   }
@@ -13615,47 +13795,26 @@ async function runReview() {
     }
   }
   const files = await fetchPrFiles(octokit, owner, repo, ctx.prNumber);
+  const included = filterExcluded(files, config.exclude);
   const { overLimit } = checkLimits(config, files);
   const limitOutcome = decideLimitOutcome(config, overLimit);
   if (limitOutcome.kind === "gate-block" || limitOutcome.kind === "advisory-block") {
-    return await reportOutcome(
-      octokit,
-      owner,
-      repo,
-      ctx.headSha,
-      "fail-closed-infra",
-      config.mode,
-      "Diff too large \u2014 skipped review.",
-      ctx.prNumber
-    );
+    return await publish("fail-closed-infra", config.mode, "Diff too large \u2014 skipped review.");
   }
   if (limitOutcome.kind === "advisory-skip") {
-    return await reportOutcome(
-      octokit,
-      owner,
-      repo,
-      ctx.headSha,
-      "availability-skip",
-      config.mode,
-      "Diff too large \u2014 skipped review.",
-      ctx.prNumber
-    );
+    return await publish("availability-skip", config.mode, "Diff too large \u2014 skipped review.");
   }
   const systemPrompt = buildInstructionsPreamble(instructions);
   const userPayload = wrapUntrustedData({
-    title: `PR #${ctx.prNumber}`,
-    diff: files.map((f) => f.patch ?? "").join("\n")
+    title: ctx.title,
+    body: ctx.body,
+    diff: formatFilePatches(included)
   });
   if (config.auth === "subscription" && process.env.ANTHROPIC_API_KEY) {
-    return await reportOutcome(
-      octokit,
-      owner,
-      repo,
-      ctx.headSha,
+    return await publish(
       "fail-closed-infra",
       config.mode,
-      "ANTHROPIC_API_KEY is set alongside auth: subscription \u2014 refusing to mix credentials.",
-      ctx.prNumber
+      "ANTHROPIC_API_KEY is set alongside auth: subscription \u2014 refusing to mix credentials."
     );
   }
   let rawOutput;
@@ -13664,15 +13823,10 @@ async function runReview() {
   } catch (err) {
     if (err instanceof ModelBackendError) {
       const errClass = classifyError(err.classifiable);
-      return await reportOutcome(
-        octokit,
-        owner,
-        repo,
-        ctx.headSha,
+      return await publish(
         errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
         config.mode,
-        err.message,
-        ctx.prNumber
+        err.message
       );
     }
     throw err;
@@ -13682,28 +13836,16 @@ async function runReview() {
     findings = parseFindings(rawOutput);
   } catch (err) {
     if (err instanceof InvalidFindingsError) {
-      return await reportOutcome(octokit, owner, repo, ctx.headSha, "fail-closed-infra", config.mode, err.message, ctx.prNumber);
+      return await publish("fail-closed-infra", config.mode, err.message);
     }
     throw err;
   }
   const gateResult = evaluateGate(findings.findings, config.block_severity);
-  const reviews = createGitHubReviewPort(octokit, owner, repo);
-  const inlineComments = findings.findings.filter((f) => f.line !== null).map((f) => ({ path: f.file, line: f.line, severity: f.severity, message: f.message }));
-  const existing = await reviews.findExistingReview(ctx.prNumber, ctx.headSha);
-  if (existing) {
-    await reviews.updateReview(existing.id, ctx.prNumber, ctx.headSha, findings.summary);
-  } else {
-    await reviews.createReview(ctx.prNumber, ctx.headSha, findings.summary, inlineComments);
-  }
-  return await reportOutcome(octokit, owner, repo, ctx.headSha, gateResult, config.mode, findings.summary, ctx.prNumber);
-}
-async function reportOutcome(octokit, owner, repo, headSha, kind, mode, summary, _prNumber) {
-  const outcome = checkOutcomeFor(kind, mode);
-  const checks = createGitHubCheckPort(octokit, owner, repo);
-  const title = outcome.titlePrefix ? `${outcome.titlePrefix} ${kind}` : kind;
-  console.log(`revieweragent: ${kind} -> ${outcome.conclusion} (exit ${outcome.exitCode})`);
-  await checks.upsertCheck(headSha, outcome.conclusion, title, summary);
-  return outcome.exitCode;
+  const inlineComments = commentsInDiff(
+    included,
+    findings.findings.filter((f) => f.line !== null).map((f) => ({ path: f.file, line: f.line, severity: f.severity, message: f.message }))
+  );
+  return await publish(gateResult, config.mode, findings.summary, inlineComments);
 }
 
 // src/action-entry.ts

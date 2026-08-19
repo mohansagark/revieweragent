@@ -28,11 +28,34 @@ interface ClaudeCliEnvelope {
   structured_output?: unknown;
 }
 
+export function classifyCliSpawnError(
+  err: { code?: string; message?: string },
+  installFailed: boolean,
+): ClassifiableError {
+  if (installFailed) return { kind: "npm_fetch_fail_cache_miss" };
+  return { kind: "cli_missing" };
+}
+
+export function isSubscriptionQuotaMessage(text: string): boolean {
+  const t = text.toLowerCase();
+  return /credit|quota|billing|usage.?limit|too low/.test(t);
+}
+
+function cliInstallFailed(): boolean {
+  return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
+}
+
 export function callSubscriptionBackend(
   systemPrompt: string,
   userPayload: string,
   claudeBin = "claude",
 ): Promise<string> {
+  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return Promise.reject(
+      new ModelBackendError("CLAUDE_CODE_OAUTH_TOKEN is not set", { kind: "missing_secret" }),
+    );
+  }
+
   return new Promise((resolve, reject) => {
     const child = spawn(
       claudeBin,
@@ -60,13 +83,12 @@ export function callSubscriptionBackend(
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
 
-    child.on("error", (err) => {
-      // Process failed to spawn at all — e.g. npm cache-miss fetch of the
-      // pinned CLI failed (SPEC.md §7/§9: availability skip).
+    child.on("error", (err: NodeJS.ErrnoException) => {
       reject(
-        new ModelBackendError(`Failed to spawn claude CLI: ${err.message}`, {
-          kind: "npm_fetch_fail_cache_miss",
-        }),
+        new ModelBackendError(
+          `Failed to spawn claude CLI: ${err.message}`,
+          classifyCliSpawnError(err, cliInstallFailed()),
+        ),
       );
     });
 
@@ -83,9 +105,6 @@ export function callSubscriptionBackend(
         return;
       }
 
-      // SPEC.md §17: use structured_output; never branch on subtype.
-      // is_error + 401/403 -> fail-closed; 429/5xx -> availability skip;
-      // 400 quota splits by auth (subscription here -> availability skip).
       if (envelope.is_error) {
         const status = envelope.api_error_status;
         if (status === 401 || status === 403) {
@@ -97,7 +116,15 @@ export function callSubscriptionBackend(
           return;
         }
         if (status === 400) {
-          reject(new ModelBackendError("Claude Code plan-quota error", { kind: "http_400", auth: "subscription" }));
+          const blob = `${JSON.stringify(envelope)}\n${stderr}`;
+          const quotaSignal = isSubscriptionQuotaMessage(blob);
+          reject(
+            new ModelBackendError(quotaSignal ? "Claude Code plan-quota error" : "Claude Code HTTP 400", {
+              kind: "http_400",
+              auth: "subscription",
+              quotaSignal,
+            }),
+          );
           return;
         }
         if (status && status >= 500) {

@@ -17,6 +17,7 @@ export function printBranchProtectionInstructions(owner: string, repo: string): 
   console.log(`  Branch protection: ${settingsUrl}`);
   console.log(`  Rulesets:          ${rulesetsUrl}`);
   console.log(
-    "\nDo this now and every PR merges regardless of the review outcome — the workflow must exist on the default branch first.",
+    "\nUntil you require this check, every PR merges regardless of the review outcome. " +
+      "Do this after the workflow has run at least once on the default branch.",
   );
 }

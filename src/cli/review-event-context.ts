@@ -17,6 +17,8 @@ export interface EventContext {
   isDraft: boolean;
   isFork: boolean;
   prAuthorLogin: string;
+  title: string;
+  body: string;
   commentBody?: string;
   commenterLogin?: string;
 }
@@ -32,6 +34,8 @@ interface PullRequestTargetPayload {
   action: PullRequestEventAction;
   pull_request: {
     number: number;
+    title?: string | null;
+    body?: string | null;
     draft: boolean;
     head: { sha: string; repo: { full_name: string } | null; user?: { login: string } };
     base: { sha: string; repo: { full_name: string } };
@@ -73,6 +77,8 @@ export async function resolveEventContext(
       isDraft: pr.draft,
       isFork,
       prAuthorLogin: pr.user.login,
+      title: pr.title ?? "",
+      body: pr.body ?? "",
     };
   }
 
@@ -92,6 +98,8 @@ export async function resolveEventContext(
       isDraft: pr.draft ?? false,
       isFork,
       prAuthorLogin: pr.user?.login ?? "",
+      title: pr.title ?? "",
+      body: pr.body ?? "",
       commentBody: payload.comment.body,
       commenterLogin: payload.comment.user.login,
     };

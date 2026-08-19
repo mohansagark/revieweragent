@@ -72,7 +72,11 @@ export const UNTRUSTED_DATA_CLOSE = "</UNTRUSTED_PR_DATA>";
 
 export function wrapUntrustedData(fields: Record<string, string>): string {
   const body = Object.entries(fields)
-    .map(([key, value]) => `${key}:\n${sanitize(value)}`)
+    .map(([key, value]) => `${key}:\n${stripDelimiterTokens(sanitize(value))}`)
     .join("\n\n");
   return `${UNTRUSTED_DATA_OPEN}\n${body}\n${UNTRUSTED_DATA_CLOSE}`;
+}
+
+function stripDelimiterTokens(text: string): string {
+  return text.split(UNTRUSTED_DATA_OPEN).join("").split(UNTRUSTED_DATA_CLOSE).join("");
 }

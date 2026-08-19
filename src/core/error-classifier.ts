@@ -9,10 +9,11 @@ export type ErrorClass = "fail-closed" | "availability-skip";
 
 export type ClassifiableError =
   | { kind: "missing_secret" }
+  | { kind: "cli_missing" }
   | { kind: "http_401" }
   | { kind: "http_403" }
   | { kind: "http_429" }
-  | { kind: "http_400"; auth: AuthType }
+  | { kind: "http_400"; auth: AuthType; quotaSignal?: boolean }
   | { kind: "http_5xx" }
   | { kind: "npm_fetch_fail_cache_miss" }
   | { kind: "invalid_json" };
@@ -20,6 +21,7 @@ export type ClassifiableError =
 export function classifyError(err: ClassifiableError): ErrorClass {
   switch (err.kind) {
     case "missing_secret":
+    case "cli_missing":
     case "http_401":
     case "http_403":
     case "invalid_json":
@@ -29,10 +31,8 @@ export function classifyError(err: ClassifiableError): ErrorClass {
     case "npm_fetch_fail_cache_miss":
       return "availability-skip";
     case "http_400":
-      // SPEC.md §8/§9: subscription plan-quota 400 is outsider-burnable
-      // and refills -> skip. api-key credit-balance 400 is an operator
-      // balance that never recovers on its own -> fail closed.
-      return err.auth === "api-key" ? "fail-closed" : "availability-skip";
+      if (err.auth === "api-key") return "fail-closed";
+      return err.quotaSignal ? "availability-skip" : "fail-closed";
   }
 }
 
