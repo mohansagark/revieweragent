@@ -3,12 +3,20 @@
 Interactive CLI (`npx revieweragent`) that wires automatic AI PR reviews into a
 git repo. Published to npm as `revieweragent` (name reserved, stub `0.0.1` live).
 
-Status: **decisions locked; mechanisms verified.** Every API and CLI behavior
-this spec depends on has been checked against source or GitHub's OpenAPI
-description — no "if the API supports it" language remains. Two conditions are
-deliberately deferred to implementation and flagged inline (§8): the
-subscription path on a real Actions runner, and `actor` semantics on
-`pull_request_target`.
+Status: **v1 implemented and verified end-to-end against a real repo
+(2026-08-19)** — `init`, `review` (subscription auth, gate mode), and the
+generated workflow all confirmed working on a live PR: real secret write,
+real check run, real Claude-generated review. Every API and CLI behavior
+this spec depends on has been checked against source, GitHub's OpenAPI
+description, or live testing — no "if the API supports it" language
+remains. That live-testing pass found and fixed five real implementation
+bugs the design-time verification couldn't have caught (job/check name
+collision with a GitHub policy not yet in effect when this spec's
+mechanisms were first checked, a missing CLI-provisioning step, a missing
+`GITHUB_TOKEN` wiring, an `actions/review` path bug, and a config-header
+duplication bug) — see §7 and §9 for the corrected mechanisms, each
+marked inline. `actor` semantics on `pull_request_target` (same-repo vs
+fork detection) were confirmed correct during that same pass.
 
 This document specifies the **whole product**. It is deliberately larger than
 the first release — see §0 for what v1 actually ships.
@@ -353,8 +361,42 @@ a settings/rulesets link.
   marker → refuse, ask for manual rename/removal.
 - Pins `actions/checkout` and **this repo's review action** to **exact commit
   SHAs** (GitHub-hosted, not npm). `upgrade` refreshes those SHAs.
-- Job name (and Checks API name) is locked: **`revieweragent`**. Renaming
-  breaks every gate-mode install. `upgrade` must not change this string.
+- **Checks API name is locked: `revieweragent`.** Renaming breaks every
+  gate-mode install; `upgrade` must not change this string. **The workflow
+  job's own id/name is deliberately a different string
+  (`revieweragent-run`)** — corrected after implementation testing against
+  a real repo. GitHub auto-creates a check run named after the job the
+  instant the job starts, and (a GitHub policy change, confirmed live,
+  2026-08-19) blocks the default `GITHUB_TOKEN` from updating that
+  auto-check's status/conclusion via the API — "Check run status and
+  conclusions can only be updated internally by GitHub Actions." Naming
+  the job identically to the managed check name means the runner's own
+  `checks.upsertCheck()` call finds GitHub's auto-check first and gets a
+  `403` trying to `PATCH` it. Giving the job a different id sidesteps the
+  collision: GitHub's auto-check for `revieweragent-run` is cosmetic (never
+  in anyone's required-check list); only the runner's explicit API calls
+  against `revieweragent` can satisfy the required check, preserving the
+  original design intent (no explicit check call ⇒ check stays "pending,"
+  correctly blocking merge).
+- **Job-level `if:` skips the job entirely for draft PRs** — corrected
+  after implementation testing. §9 originally assumed a running job could
+  choose to emit "no check" for a no-op; that's not achievable once a job
+  runs (GitHub always auto-creates a check for it). For drafts specifically
+  this is moot and safe: GitHub natively blocks merging any draft PR
+  regardless of check status, so skipping the job (`if:
+  github.event_name != 'pull_request_target' ||
+  github.event.pull_request.draft == false`) costs nothing and avoids the
+  no-op entirely. The other no-op cases (fork rate-limit exceeded,
+  comment-gated fork with no `/review` yet) are **not** drafts and remain
+  code-side (§8 step 5, §9) — job-level `if:` there would incorrectly let
+  GitHub's own auto-check report a green no-op, which is not a safe gate
+  for a mergeable PR.
+- The workflow's review step **must set `GITHUB_TOKEN:
+  ${{ secrets.GITHUB_TOKEN }}` in its `env:`** alongside the Claude
+  credential — corrected after implementation testing. GitHub Actions does
+  not auto-inject `GITHUB_TOKEN` into a JS action's `process.env`; it must
+  be passed explicitly like any other secret, or the review step can never
+  call the GitHub API at all (Reviews, Checks, Actions actor-rate-limit).
 - Checkout: **base / default branch only** (the `pull_request_target`
   default). `persist-credentials: false`. Never
   `ref: ${{ github.event.pull_request.head.sha }}`, never
@@ -372,9 +414,21 @@ a settings/rulesets link.
   `owner/repo` in the package at release time; `init` writes that literal
   into the workflow. Do not leave `<this-github-repo>` as a placeholder in
   generated YAML.
-- Subscription path may still fetch pinned `@anthropic-ai/claude-code` on
-  **cache miss**. Cache key = that exact version (`actions/cache`, SHA-pinned).
-  Cache miss + npm failure is an **availability skip** (§9), not fail-closed.
+- **The workflow must install the pinned `@anthropic-ai/claude-code` CLI
+  before the review step, for `auth: subscription` only.** Real bug found
+  in implementation testing: this step was originally missing entirely —
+  `spawn("claude", ...)` failed with `ENOENT` on every run (no
+  GitHub-hosted runner has it preinstalled), and that failure was
+  misclassified as a silent availability skip with no logging, reporting a
+  false "pass" while the model was never actually called. v1 ships a plain
+  `npm install -g @anthropic-ai/claude-code@<pinned version>` step (version
+  matches whatever build this spec's §8 CLI verification was run against).
+  `actions/cache`-based caching of that install (to avoid a fresh npm
+  fetch on every PR) is **not implemented in v1** — flagged as follow-up
+  work, not a functional gap: correctness holds either way, this is a
+  cost/speed optimization only. npm install failure is an **availability
+  skip** (§9), not fail-closed — an npm registry outage must not freeze
+  merges.
 - Pass **exactly one** credential into the job env, matching `auth` in
   `.revieweragent.yml`:
 
@@ -732,19 +786,32 @@ the default/base branch so a PR cannot rewrite the gate.
 
 ### Job `if:` and skip vs no-op (locked)
 
-GitHub treats a **skipped** required job as success. `pull_request_target`
-also associates the workflow with the PR even though `github.sha` is the
-base commit. Together that means a job-level `if:` skip is not a safe gate.
+GitHub treats a **skipped** required job as success **for that job's own
+check** — but as of the job-id/check-name split below, the job's own check
+is never the required one, so that fact stops being a hazard for
+cases where job-level `if:` is genuinely safe. `pull_request_target` also
+associates the workflow with the PR even though `github.sha` is the base
+commit.
+
+**Corrected after implementation testing against a real repo (was
+originally "a job-level `if:` skip is not a safe gate" — true only while
+the job's own auto-check shared a name with the required check; §7 above
+has the full explanation):**
 
 | Case | What the workflow does |
 |---|---|
-| Draft `pull_request_target` | Job **runs**. Runner no-ops: no Reviews API call, **no** check run on head SHA, exit 0. Merge stays blocked in gate mode because the required check has not been reported on head. `ready_for_review` is the real run. |
-| `issue_comment` that is not a PR, lacks the trigger phrase, or commenter lacks write | Job-level `if:` may skip (saves minutes). These events should not be the required check's only path. |
+| Draft `pull_request_target` | **Job does not run at all** — job-level `if:` (§7). Safe because GitHub natively blocks merging any draft PR regardless of check status; the required check `revieweragent` simply stays unreported ("pending") until `ready_for_review`, which is the real run. |
+| `issue_comment` that is not a PR, lacks the trigger phrase, or commenter lacks write | Job **runs** (resolving this requires an API call — event payload alone can't tell), runner no-ops code-side: no Reviews call, no explicit check call, exit 0. The job's own auto-check (`revieweragent-run`) may show success, but it is never in anyone's required-check list, so this has no effect on mergeability — the required check `revieweragent` stays unreported. |
 | Fork PR, `fork_policy: auto` (default) | Real review on opened / synchronize / ready_for_review (same as same-repo). |
-| Fork PR and `fork_policy: comment-gated`, no `/review` yet | Job **runs** on `opened`/`synchronize`. Runner no-ops the same way as drafts: no success check on head. A write-access `/review` is the real run. |
+| Fork PR and `fork_policy: comment-gated`, no `/review` yet | Job **runs** on `opened`/`synchronize` (must call the API to know it's a fork). Runner no-ops code-side, same mechanism as the `issue_comment` row above. A write-access `/review` is the real run. |
+| Fork PR, per-actor hourly cap exceeded | Job **runs** (cap check itself requires an API call), runner no-ops code-side, same mechanism as above. |
 | `merge_group` | Reuse prior check when possible (§8). Always attach a check on `merge_group.head_sha` (required for merge queues). |
 
-Job-level `if:` is allowed only to drop obvious non-PR `issue_comment` noise.
+Job-level `if:` is safe exactly where the skip condition is knowable from
+the event payload alone **and** the underlying case can't be merged anyway
+regardless of checks (drafts, via GitHub's native draft-merge block). Every
+other no-op case needs the job to actually run and call the API to
+determine the condition, then no-ops code-side rather than via `if:`.
 
 ### Concurrency
 
@@ -1165,13 +1232,16 @@ ship in v1. A row appearing here does not mean it is in the first release.
 | Local credential cache | Optional plaintext `0600`; keychain deferred (recorded tradeoff); separate from Actions secret |
 | Secret names | `REVIEWERAGENT_ANTHROPIC_API_KEY` or `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` |
 | Workflow | Marker-owned; SHA-pinned **public** `owner/repo/actions/review@sha` — **not** `npx` per event |
+| Job id vs check name | Workflow job id is `revieweragent-run`; Checks API name stays `revieweragent`. Deliberately different — corrected after live testing found GitHub blocks `GITHUB_TOKEN` from updating a check that shares its name with the running job (§7, §9) |
+| `GITHUB_TOKEN` | Review step's `env:` must set it explicitly (`${{ secrets.GITHUB_TOKEN }}`) — not auto-injected into a JS action's `process.env` — corrected after live testing (§7) |
+| Subscription CLI provisioning | Workflow installs pinned `@anthropic-ai/claude-code` via plain `npm install -g` before the review step (auth: subscription only) — corrected after live testing found this step was missing entirely, causing a silent false-pass (§7). `actions/cache` caching is follow-up work, not v1 |
 | Third-party review action | None. `claude-code-action` blocks non-write actors, which kills `fork_policy: auto` — verified, see §7 |
 | Config | `.revieweragent.yml` with `version: 1`; CODEOWNERS **printed** in v1, written later |
 | Instructions | `.revieweragent/instructions.md` from **base** |
 | `CLAUDE.md` | Not written; not used as config |
 | Events | v1: `pull_request_target` + gated `issue_comment`. `merge_group` later |
 | `pull_request` event | Not used |
-| Draft PRs | Skipped (job runs, no check on head) |
+| Draft PRs | Skipped via job-level `if:` — job does not run at all (corrected after live testing; §9) |
 | Concurrency | Cancel-in-progress; PR number **or** issue number **or** merge-group SHA |
 | Fork PRs | Default **`fork_policy: auto`**; per-actor hourly cap counts **inference only**; 400/429 quota is availability skip |
 | First-time contributor toggle | Not an abuse gate; do not rely on it |
@@ -1185,7 +1255,7 @@ ship in v1. A row appearing here does not mean it is in the first release.
 | Model output | Findings JSON schema; **no** verdict field honored |
 | Evaluator | Deterministic, from `block_severity` |
 | Fail-closed | Missing secret, 401/403, **`api-key` 400 credit/billing** (persistent, operator-only), invalid JSON (no quota signal), over-limit, BLOCK findings |
-| Availability skip | 429, **`subscription` plan-quota 400** (outsider-burnable, refills), 5xx overload, Claude CLI npm cache-miss fail — `success` + `Review skipped:` |
+| Availability skip | 429, **`subscription` plan-quota 400** (outsider-burnable, refills), 5xx overload, Claude CLI npm install failure — `success` + `Review skipped:` |
 | Skip vs closed test | Outsider can cause it **and** it ends on its own → skip. Either false → fail closed (§9) |
 | `on_limit` | Advisory only; **gate always blocks** on over-limit |
 | Diff limits | `max_diff_lines` / `max_prompt_tokens` + default excludes |
@@ -1197,7 +1267,7 @@ ship in v1. A row appearing here does not mean it is in the first release.
 | Commands | v1: `init`, `review`, `uninstall`. Later: `upgrade`, `rotate-secret`, `apply-protection` |
 | gh CLI | Optional; OS-specific install or PAT with **split** scopes |
 | CI separation | Separate workflow from lint/build/test |
-| Subscription CLI | **Verify `claude -p` in Actions before shipping Agent path** |
+| Subscription CLI in Actions | **Verified end-to-end against a real repo, 2026-08-19** — real PR, real review posted, real gate check. See §7's job-id/check-name/CLI-provisioning corrections found in that same pass |
 
 ---
 
