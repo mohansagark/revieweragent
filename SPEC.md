@@ -53,9 +53,10 @@ rewrites managed files and overwrites the secret (§11). Both commands are
 ergonomics over paths that exist. `rotate-secret` becomes genuinely necessary
 around the subscription token's ~1-year expiry — well after v1.
 
-**Sequencing note.** If the §8 implementation gate fails on a real runner,
-ship `api-key` first and hold `subscription` — §3's registry already makes
-that a config-level cut, not a rewrite.
+**Sequencing note.** Subscription is the product. The §8 implementation
+gate on a real Actions runner is go/no-go for v1 — not a prompt to fall
+back to `api-key`. If it fails, park the project; `api-key` stays in the
+registry as specified later work, not a consolation first release.
 
 ---
 
@@ -183,6 +184,16 @@ Linux CI jump hosts, and the cache is optional (user can decline). Revisit
 post-v1. Do not store the token in `~/.claude/` (Claude Code does not save
 `setup-token` output; we must not pretend it does).
 
+**Acquisition, recorded:** a temp-file handoff (write the token to disk after
+browser auth, read it back, delete when done) was considered and **rejected**.
+Even with cleanup, it leaves a live long-lived credential on disk that
+survives a crash mid-setup, and is exposed to other local processes/users and
+backup/indexing services in that window. Capturing it directly from the
+`setup-token` subprocess's own output — in memory, no disk write — gets the
+same "no manual copy-paste" UX with none of that exposure. This is also the
+documented intended use: Anthropic describes `setup-token` output as
+script-consumable, not eyeball-only (§3).
+
 ---
 
 ## 4. CLI surface
@@ -223,6 +234,16 @@ Non-interactive `init` requires GitHub auth (`gh` logged in, or `GH_TOKEN` /
 
 Missing inputs → exit 1 with a machine-readable error, no prompts.
 
+**`--commit [--push]`** (opt-in, off by default). §5 step 8's commit/push is
+print-only unless this is passed — `init` never touches the working tree or
+the remote without explicit request. `--commit` alone stages and commits the
+files `init` wrote (only those, never a broad `git add -A`) with a fixed
+message; `--push` (requires `--commit`) pushes that commit to the tracked
+remote. Refuses if the working tree has other uncommitted changes outside
+what `init` wrote — never bundles unrelated work into its commit. Same
+opt-in shape as `--apply-protection`: the manual path stays the default,
+automation is something the user explicitly reaches for.
+
 ---
 
 ## 5. Setup flow (`init`)
@@ -238,11 +259,19 @@ Interactive (default):
      `api-key` providers. v1: **Claude** (Console). Later: OpenAI, Gemini.
 3. **Pick a provider** from that list. v1: one entry (Claude). Then acquire
    the credential for that provider + category:
-   - Agent / Claude: run `claude setup-token` (browser), then paste the
-     printed token (Claude Code does not store it). Reuse local cache if
-     present.
+   - Agent / Claude: installer **spawns `claude setup-token` itself** as a
+     subprocess (stdin/stderr inherited so the browser-login prompt and URL
+     display normally; stdout piped and simultaneously echoed to the
+     terminal). It parses the token from the captured stdout once the
+     subprocess exits — **no manual copy-paste**, and the token exists only
+     as an in-memory value, never written to a file. See §11 for why this
+     replaces an earlier temp-file design. Reuse local cache if present
+     (skips the subprocess entirely).
    - Model / Claude: masked paste of the Console API key, or reuse cache.
-4. Dependency checks (§6), confirm-gated fixes. Agent / Claude also
+4. Dependency checks (§6), confirm-gated fixes. If `gh` is present but not
+   authenticated, run `gh auth login` (its own browser/device-code flow —
+   same class of unavoidable identity step as `setup-token` or a PAT, just
+   via GitHub instead of Anthropic). Agent / Claude also
    requires the `claude` CLI for `setup-token` at install time (CI installs
    a pinned CLI itself; see §8). Before writing secrets, **subscription**
    init prints: token lasts ~one year; quota is shared with interactive
@@ -257,6 +286,9 @@ Interactive (default):
 7. Write files (§7). **v1:** print the CODEOWNERS recommendation rather than
    writing entries (§0).
 8. Outro: commit/push **to the default branch** to activate the workflow.
+   **Print-only by default** — `init` never runs `git add`/`commit`/`push`
+   itself unless `--commit`/`--push` was passed (§4). This is the last step
+   of `init`; nothing runs after it.
    **Never apply branch protection here.** Applying a required check for a
    job that has never existed on the default branch is a chicken-and-egg bug
    — forbidden in every release.
@@ -278,7 +310,7 @@ connected steps, intro/outro banner. No raw-stdin handling.
 |---|---|---|
 | Node.js + npm | Running `npx revieweragent` | Hard prerequisite |
 | git | Target must be a git repo | Hard prerequisite |
-| `gh` CLI | Secrets, repo metadata, protection APIs | **Optional.** If missing: (a) OS-specific install command shown and confirm-gated (`brew` / `apt` / `winget` — never a guessed command), or (b) PAT / `GH_TOKEN` and REST. |
+| `gh` CLI | Secrets, repo metadata, protection APIs | **Optional.** If missing: (a) OS-specific install command shown and confirm-gated (`brew` / `apt` / `winget` — never a guessed command), or (b) PAT / `GH_TOKEN` and REST. If **present but not authenticated**, run `gh auth login` (browser/device-code) — a real identity step, not skippable, but only reached in the common case, not the PAT fallback. |
 | `claude` CLI | `setup-token` during **subscription** init only | Missing → confirm-gated install via `npm install -g @anthropic-ai/claude-code` (OS npm prefix / sudo called out). Not required for `api-key` init. CI uses a pinned copy, not the operator's global CLI. |
 | Network | npm (init + cold-cache Claude CLI), api.github.com, api.anthropic.com | Review **runner** is SHA-pinned from GitHub, not downloaded from npm per event. See §7 / §9 availability. |
 | Repo access | Secrets: metadata write. Protection: admin. | Checked upfront; fall back to printed instructions + settings links |
@@ -1126,6 +1158,7 @@ ship in v1. A row appearing here does not mean it is in the first release.
 | Setup prompt | **Agent or Model?** then registry-filtered provider list |
 | Auth | Agent → `subscription`; Model → `api-key` |
 | Subscription token | `claude setup-token`, ~1 year, CI via Claude Code CLI, no tools |
+| Token acquisition | Installer spawns `setup-token` itself, captures output in memory — no manual copy-paste, no temp file (§5, §11) |
 | CLI argv (subscription) | `--tools ""` (not `--allowedTools`), `--model sonnet`, `--disable-slash-commands`, `--strict-mcp-config`, `--json-schema`; Node `stdin: "ignore"`; never `--bare` — verified §8 |
 | Model pinning | Mandatory. Unpinned defaults to Opus + 75k-token discovery overhead = ~18x cost (§8) |
 | CLI result parsing | Use `structured_output`; never branch on `subtype`. `is_error` + 401/403 → fail-closed; 429/5xx → availability skip. **400 quota splits by `auth`** (§8) |
