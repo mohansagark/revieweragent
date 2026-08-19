@@ -1,0 +1,51 @@
+{
+  "name": "revieweragent",
+  "version": "0.0.1",
+  "description": "Wire automatic AI pull-request review into a git repo.",
+  "type": "module",
+  "bin": {
+    "revieweragent": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "actions/review/action.yml",
+    "actions/review/dist",
+    "pinned-shas.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:cli": "tsc -p tsconfig.json",
+    "build:action": "node esbuild.action.mjs",
+    "build": "npm run build:cli && npm run build:action",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src tests --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\" \"actions/**/*.ts\" \"tests/**/*.ts\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mohansagark/revieweragent.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "@octokit/rest": "^21.0.2",
+    "commander": "^12.1.0",
+    "libsodium-wrappers": "^0.7.15",
+    "minimatch": "^10.0.1",
+    "yaml": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers": "^0.7.14",
+    "@types/node": "^22.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.18.1",
+    "@typescript-eslint/parser": "^8.18.1",
+    "esbuild": "^0.24.2",
+    "eslint": "^8.57.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

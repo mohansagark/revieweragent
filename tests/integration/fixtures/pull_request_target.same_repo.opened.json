@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 42,
+    "draft": false,
+    "head": { "sha": "headsha1", "repo": { "full_name": "acme/widgets" }, "user": { "login": "alice" } },
+    "base": { "sha": "basesha1", "repo": { "full_name": "acme/widgets" } },
+    "user": { "login": "alice" }
+  },
+  "repository": { "full_name": "acme/widgets" }
+}

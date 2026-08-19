@@ -1,0 +1,5 @@
+name: "revieweragent review"
+description: "Automated AI pull-request review (revieweragent)"
+runs:
+  using: "node20"
+  main: "dist/index.js"

@@ -1,2 +1,11 @@
 node_modules/
 .claude/
+/dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
+# actions/review/dist is committed on purpose: GitHub Actions fetches this
+# path directly by SHA with no npm install step (SPEC.md §7).

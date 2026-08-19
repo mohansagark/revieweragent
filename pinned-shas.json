@@ -1,0 +1,5 @@
+{
+  "_comment": "Filled in by the release process before publishing (SPEC.md §7: 'Record the exact owner/repo in the package at release time; init writes that literal into the workflow. Do not leave <this-github-repo> as a placeholder in generated YAML.'). checkoutSha pins actions/checkout to an exact upstream commit SHA. reviewActionSha pins this repo's own actions/review path to the commit SHA being released. Both are intentionally empty pre-release — write-workflow.ts refuses to generate a workflow with an unset pin rather than emit a placeholder that would silently install a moving/unverified target.",
+  "checkoutSha": "",
+  "reviewActionSha": ""
+}
