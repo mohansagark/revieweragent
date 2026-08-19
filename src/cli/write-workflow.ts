@@ -59,6 +59,7 @@ jobs:
           persist-credentials: false
       - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
         env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
 ${credentialEnvLine(auth)}
 `;
 }

@@ -47,6 +47,16 @@ describe("action-interface contract", () => {
     expect(step.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 
+  it("wires GITHUB_TOKEN into the review step's env", () => {
+    // Real bug caught running Scenario B against a real PR: GitHub
+    // Actions does not auto-inject GITHUB_TOKEN into a JS action's
+    // process.env — it must be passed explicitly via env:, same as any
+    // other secret. Without this the review step can never call the
+    // GitHub API at all (checks, reviews, actor rate-limit).
+    const step = doc.jobs.revieweragent.steps[1];
+    expect(step.env.GITHUB_TOKEN).toBeDefined();
+  });
+
   it("checks out with persist-credentials: false and no ref override", () => {
     const checkoutStep = doc.jobs.revieweragent.steps[0];
     expect(checkoutStep.with["persist-credentials"]).toBe(false);
