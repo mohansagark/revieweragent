@@ -30,11 +30,11 @@ npx revieweragent init
 
 That writes:
 
-- `.revieweragent.yml` — local config (gitignored)
+- `.revieweragent.yml` — repo config (commit this)
 - `.github/workflows/revieweragent.yml` — the review workflow (committed)
-- A GitHub Actions secret (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`)
+- A GitHub Actions secret (`REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` or `REVIEWERAGENT_ANTHROPIC_API_KEY`)
 
-Then commit and push the workflow file. Later PRs get a review automatically.
+Then commit and push those files. Later PRs get a review automatically.
 
 ### Auth
 
