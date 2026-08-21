@@ -17,10 +17,22 @@ describe("publish.yml trusted-publisher path", () => {
     expect(String(setupNode.with["node-version"])).toBe("24");
   });
 
-  it("strips setup-node's empty _authToken before OIDC publish", () => {
-    expect(publishStep.run).toMatch(/_authToken/);
-    expect(publishStep.run).toMatch(/sed/);
+  it("installs npm 11.5.1+ instead of trusting the runner image's bundled npm", () => {
+    const installNpm = job.steps.find((s: { run?: string }) => s.run?.includes("npm install -g npm@"));
+    expect(installNpm).toBeDefined();
+    expect(installNpm?.run).toMatch(/npm@11\./);
+  });
+
+  it("strips only the npmjs registry _authToken line before OIDC publish", () => {
+    expect(publishStep.run).toContain("registry\\.npmjs\\.org");
+    expect(publishStep.run).toContain("_authToken");
+    expect(publishStep.run).not.toContain("sed -i '/_authToken/d'");
     expect(publishStep.run).toMatch(/OIDC trusted publisher/);
+  });
+
+  it("reuses the existing yaml runtime dependency already used by other contract tests", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { dependencies: { yaml?: string } };
+    expect(pkg.dependencies.yaml).toBeTruthy();
   });
 
   it("still publishes with NPM_TOKEN when that secret is set", () => {
