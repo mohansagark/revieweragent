@@ -77,9 +77,12 @@ Same engine as CI. Needs the same GitHub token and Claude/Anthropic credentials.
 
 ## What v1 does not do
 
-- Does not apply branch protection or merge-queue rules
+These are **v2** (already specified) unless noted:
+
+- Does not apply branch protection or merge-queue rules (`apply-protection`, `merge_group`)
 - Does not write `CODEOWNERS` (it prints a snippet you can paste)
 - Does not ship `upgrade`, `rotate-secret`, or `apply-protection`
+- Does not offer Cursor (v2) or other git hosts / Copilot / OpenAI / Gemini (v3)
 
 ## Upgrade
 

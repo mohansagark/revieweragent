@@ -1,14 +1,11 @@
 <!--
 Sync Impact Report
-Version change: none (unratified template) → 1.0.0
-Modified principles: n/a (initial ratification)
-Added sections: Core Principles (I–VI), Security & Sanitization Requirements,
-  Development Workflow, Governance
+Version change: 1.0.0 → 1.1.0 (MINOR — Principle II now names v2/v3)
+Modified principles: II (v1/Later → v1 shipped, v2 specified + Cursor, v3 undesigned)
+Added sections: none
 Removed sections: none
-Deferred placeholders: RATIFICATION_DATE set to today (2026-08-19); no
-  prior ratification exists — this is the first constitution write.
-Templates requiring follow-up: none — plan/spec/tasks templates read this
-  file at runtime and need no edits for this change.
+Deferred placeholders: none
+Templates requiring follow-up: none
 -->
 
 # revieweragent Constitution
@@ -27,13 +24,15 @@ never drift apart silently.
 unverified "if the API supports it" language that cost rework. Treating it
 as authoritative, not aspirational, is what keeps that from repeating.
 
-### II. v1 Scope Discipline (NON-NEGOTIABLE)
-Only `init`, `review`, and `uninstall` ship in v1, per `SPEC.md` §0.
-`upgrade`, `rotate-secret`, `apply-protection`, `merge_group` handling,
-keychain storage, automatic CODEOWNERS writing, and tuned fork rate
-limiting are explicitly deferred — building them before v1 ships is a
-constitution violation, not ambition. Branch protection stays a printed
-manual step in v1; auto-apply is later work.
+### II. Release-scope discipline (NON-NEGOTIABLE)
+v1 ships only `init`, `review`, and `uninstall`, per `SPEC.md` §0, and is
+done. **v2** is the specified follow-on (`upgrade`, `rotate-secret`,
+`apply-protection`, `merge_group` reuse, CODEOWNERS writing, OS keychain)
+plus lighting up **Cursor** as an Agent provider. **v3** is undesigned
+work in §18 (other git hosts, Copilot/OpenAI/Gemini, org rollout, and so
+on). `/speckit-plan` and `/speckit-tasks` MUST NOT schedule v3 work inside
+a v2 plan, or v2 work disguised as a v1 patch. Branch protection stays a printed
+instruction in v1; auto-apply is v2 (`apply-protection`).
 
 **Rationale**: `SPEC.md` §0 slices the product down to the smallest thing
 that answers "are the reviews any good?" — every command beyond that is
@@ -116,9 +115,9 @@ is small next to the cost of shipping on a wrong assumption a second time.
   (Principle III) or the sanitization boundary (Principle IV) require
   explicit call-out in review; these are the two places a quiet regression
   is most dangerous.
-- v1/Later scope (Principle II) is enforced at planning time: `/speckit-plan`
-  and `/speckit-tasks` MUST NOT schedule deferred-scope work ahead of the
-  three v1 commands without an explicit constitution amendment.
+- v1/v2/v3 scope (Principle II) is enforced at planning time: `/speckit-plan`
+  and `/speckit-tasks` MUST NOT schedule v3 work in a v2 plan, or v2 work
+  as a v1 patch, without an explicit constitution amendment.
 
 ## Governance
 
@@ -138,4 +137,4 @@ resolved by amending this document rather than left as a standing
 exception. Runtime development guidance for agents lives in `SPEC.md` and
 the `.specify/` templates, not duplicated here.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-19
+**Version**: 1.1.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21

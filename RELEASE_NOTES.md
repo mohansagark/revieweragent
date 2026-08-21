@@ -10,7 +10,7 @@ page — do not invent copy at the last minute.
 **Launch status:** not ready. Technical v1 is live; marketing v1 is not.
 
 **How to update:** add a dated bullet under **Shipped** when a user-visible
-capability lands. Move an item from **Would strengthen a launch** only after it
+capability lands. Move an item from **v2** into **Shipped** only after it
 ships. Do not log pins, SHA bumps, or CI-only fixes.
 
 ---
@@ -39,7 +39,8 @@ npx revieweragent init
 Repo maintainers who already pay for Claude Code and want that same reviewer on
 every PR, without standing up another bot or sharing a team API key.
 
-Not yet: GitLab / Bitbucket / Azure DevOps, or “apply branch protection for me.”
+Not yet: GitLab / Bitbucket / Azure DevOps (**v3**), or “apply branch protection
+for me” (**v2**). Cursor as a second Agent is **v2**.
 
 ---
 
@@ -67,18 +68,26 @@ to talk about if this ships tomorrow.
 
 ---
 
-## Would strengthen a launch (not shipped)
+## v2 (specified — next, not shipped)
 
-Hold the public post until at least one of these is real — or until the current
-list feels enough on its own:
+Already designed in SPEC.md. Plus **Cursor** as a second Agent provider
+(same registry shape as Claude; write the Cursor auth/CI spec before coding).
 
 - One-command **upgrade** of an existing install (today: re-run init)
-- **Apply branch protection** for the `revieweragent` check (today: print the
-  settings link)
-- **GitLab / Bitbucket / Azure DevOps**
-- More providers than Claude (Cursor, Copilot, OpenAI, Gemini)
+- **rotate-secret**
+- **Apply branch protection** for the `revieweragent` check
 - Merge-queue (`merge_group`) so gated PRs stay green in the queue
-- Auto-written `CODEOWNERS` (today: printed snippet)
+- Auto-written `CODEOWNERS`
+- OS keychain for the local credential cache
+- **Cursor** (Claude stays the v1 default)
+
+## v3 (no design yet — not a backlog)
+
+- GitLab / Bitbucket / Azure DevOps
+- GitHub Copilot, OpenAI, Gemini
+- Org-wide `--org` rollout, usage dashboard, org-level secret
+- Multi-provider in one repo
+- Tuned / adaptive fork rate limiting
 
 ---
 

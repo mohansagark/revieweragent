@@ -19,7 +19,8 @@ marked inline. `actor` semantics on `pull_request_target` (same-repo vs
 fork detection) were confirmed correct during that same pass.
 
 This document specifies the **whole product**. It is deliberately larger than
-the first release — see §0 for what v1 actually ships.
+the first release — see §0 for what shipped in v1, what is **v2**, and what
+is undesigned **v3**.
 
 ---
 
@@ -30,40 +31,53 @@ shipping anything would mean a long stretch with no feedback on the only
 question that matters: **are the reviews any good?** Everything except the
 review itself is scaffolding around that.
 
-v1 is therefore sliced to the smallest thing that answers it, with the
-riskiest scaffolding deferred.
+v1 is therefore sliced to the smallest thing that answers it. Specified
+follow-on work is **v2**. Work with no design yet is **v3** — not an unnamed
+"Later" bucket.
 
-| Area | v1 | Later |
-|---|---|---|
-| Commands | `init`, `review`, `uninstall` | `upgrade`, `rotate-secret`, `apply-protection` |
-| Review quality path — schema (§12), evaluator, sanitization (§10), inline comments, idempotency (§14) | **all of it** | — |
-| Modes | advisory **and** gate — both emit the `revieweragent` check run | — |
-| Branch protection (§13) | **manual.** Print the exact check name + settings link; user flips it | auto RMW + verify via `apply-protection` |
-| Auth paths | both (`subscription`, `api-key`) | — |
-| Local credential cache | yes — the "don't re-auth per repo" requirement | keychain (§18) |
-| Fork policy | `auto` default + simple per-actor hourly cap | tuned rate limiting |
-| `merge_group` | not handled | check reuse (§8 step 4) |
-| CODEOWNERS | printed recommendation | written automatically |
-| Platform port (§2) / provider registry (§3) | interfaces exist, one implementation each | additional platforms/providers |
+| Area | v1 (shipped) | v2 | v3 |
+|---|---|---|---|
+| Commands | `init`, `review`, `uninstall` | `upgrade`, `rotate-secret`, `apply-protection` | — |
+| Review quality path — schema (§12), evaluator, sanitization (§10), inline comments, idempotency (§14) | **all of it** | — | — |
+| Modes | advisory **and** gate — both emit the `revieweragent` check run | — | — |
+| Branch protection (§13) | **manual.** Print the exact check name + settings link; user flips it | auto RMW + verify via `apply-protection` | — |
+| Auth paths | both (`subscription`, `api-key`) | — | Copilot-style GitHub-seat auth (distinct path) |
+| Agent providers (§3) | Claude (Claude Code) | **Cursor** (same `subscription-oauth` registry shape; write the Cursor auth/CI spec before code) | GitHub Copilot, other agents |
+| Model providers (§3) | Claude (Console API key) | — | OpenAI, Gemini |
+| Local credential cache | yes — plaintext `0600` | OS keychain | — |
+| Fork policy | `auto` default + simple per-actor hourly cap | — | tuned / adaptive rate limiting |
+| `merge_group` | not handled | check reuse (§8 step 4) | — |
+| CODEOWNERS | printed recommendation | written automatically (managed marker block) | — |
+| Platforms (§2) | GitHub (port exists; one implementation) | — | GitLab, Bitbucket, Azure DevOps |
+| Org / batch / dashboard | — | — | §18 |
 
-**Why gate mode still ships in v1.** Emitting a check run and marking it
+**v2 Cursor.** The installer registry already has a planned Agent row. v2
+lights it up next to Claude. Cursor stays on the existing
+`subscription-oauth` shape — not Copilot's GitHub-seat path. Specify the
+Cursor credential + CI backend in a v2 spec before implementing; that
+missing write-up does **not** slip Cursor to v3.
+
+**Why gate mode still shipped in v1.** Emitting a check run and marking it
 `failure` is cheap — the runner already computes PASS/BLOCK. What is expensive
 and racy is *auto-applying branch protection* (§13: RMW with no conditional
 write available, classic-vs-ruleset detection, admin-rights handling,
 chicken-and-egg ordering). Splitting those two lets v1 keep the capability
-while deferring the hard part: the check is emitted, and whether it is
+while deferring the hard part to **v2**: the check is emitted, and whether it is
 *required* is one toggle the user flips in repo settings. `apply-protection`
-later turns a documented manual step into a command — it does not unlock a
+turns a documented manual step into a command — it does not unlock a
 capability.
 
-**Why `upgrade` and `rotate-secret` defer.** Re-running `init` already
+**Why `upgrade` and `rotate-secret` are v2.** Re-running `init` already
 rewrites managed files and overwrites the secret (§11). Both commands are
 ergonomics over paths that exist. `rotate-secret` becomes genuinely necessary
-around the subscription token's ~1-year expiry — well after v1.
+around the subscription token's ~1-year expiry.
 
-**Sequencing note.** Subscription is the product. The §8 implementation
-gate on a real Actions runner is go/no-go for v1 — not a prompt to fall
-back to `api-key`. If it fails, park the project; `api-key` stays in the
+**v3 is undesigned.** A row in §18 is not a backlog item to implement. Reaching
+one means opening a fresh spec.
+
+**Sequencing note (historical, v1).** Subscription is the product. The §8 implementation
+gate on a real Actions runner was go/no-go for v1 — not a prompt to fall
+back to `api-key`. If it had failed, park the project; `api-key` stayed in the
 registry as specified later work, not a consolation first release.
 
 ---
@@ -76,8 +90,8 @@ registry as specified later work, not a consolation first release.
 - Run via `npx revieweragent`. No persistent local script to maintain.
 - The package is both the **installer** (local, npm) and the **review runner**
   (JS GitHub Action in a **public** GitHub repo, SHA-pinned — not `npx` on
-  every PR). `npx revieweragent` is for init/uninstall (and later
-  upgrade/rotate-secret/apply-protection) only.
+  every PR). `npx revieweragent` is for init/uninstall (and v2
+  `upgrade`/`rotate-secret`/`apply-protection`) only.
 - Installer is Node-based. The review job only ever treats the PR as **data**
   (diff text via the GitHub API). It never checkouts PR head, never
   installs/builds/executes target-project code. Works on any repo language.
@@ -131,20 +145,21 @@ Setup maps **Agent or Model?** onto `authMethods` type
 (`subscription-oauth` vs `api-key`), then shows the **registry-filtered
 list** for that category.
 
-| Category (prompt) | Auth type | v1 registered | Planned (same registry, not implemented) |
-|---|---|---|---|
-| **Agent** | `subscription-oauth` | Claude (Claude Code Pro/Max/Team/Enterprise) | Cursor, GitHub Copilot, other agent tools |
-| **Model** | `api-key` | Claude (Console API key) | OpenAI, Gemini |
+| Category (prompt) | Auth type | v1 (live) | v2 | v3 |
+|---|---|---|---|---|
+| **Agent** | `subscription-oauth` | Claude (Claude Code Pro/Max/Team/Enterprise) | **Cursor** | GitHub Copilot, other agent tools |
+| **Model** | `api-key` | Claude (Console API key) | — | OpenAI, Gemini |
 
 A provider with no method in the chosen category is omitted from that list.
-v1 lists one row either way: **Claude**. Planned rows are in the registry as
-`status: planned` so the installer core is not rewritten when they light up;
-they are **not** shown as fake disabled menu items in v1.
+v1 lists one row either way: **Claude**. v2 adds **Cursor** as a second Agent
+row. Planned rows stay in the registry as `status: planned` so the installer
+core is not rewritten when they light up; they are **not** shown as fake
+disabled menu items until their release.
 
 **GitHub Copilot** does not fit this auth shape (seat/license on a GitHub
-account, not a portable OAuth token or API key). When added it needs a
-distinct integration path, not just a new registry row. Flag that in the
-registry entry.
+account, not a portable OAuth token or API key). That is **v3** — a distinct
+integration path, not just a new registry row. Flag that in the registry
+entry.
 
 ### Claude v1 backends (the only live row)
 
@@ -210,17 +225,17 @@ The prompt UI (`@clack/prompts`) is a layer over a non-interactive engine.
 Every command works with flags + env when `--non-interactive` is set or stdin
 is not a TTY.
 
-| Command | v1 | Purpose |
+| Command | Ships | Purpose |
 |---|---|---|
-| `init` | **yes** | Install into the current repo |
-| `review` | **yes** | CI entrypoint inside the GitHub Action — not invoked via `npx` in workflows |
-| `uninstall` | **yes** | Remove managed files / optional secret. (v1: does not touch protection — nothing auto-applied it) |
-| `upgrade` | later | Bump pinned action SHA in the workflow; migrate config. Until then, re-run `init` |
-| `rotate-secret` | later | Write a new API key or OAuth token to the matching repo secret (and optional local cache). Until then, re-run `init` |
-| `apply-protection` | later | Gate-only: add the `revieweragent` required check (RMW + verify). **Only** after the workflow exists on the default branch. v1 prints these steps instead (§13) |
+| `init` | **v1** | Install into the current repo |
+| `review` | **v1** | CI entrypoint inside the GitHub Action — not invoked via `npx` in workflows |
+| `uninstall` | **v1** | Remove managed files / optional secret. (v1: does not touch protection — nothing auto-applied it) |
+| `upgrade` | **v2** | Bump pinned action SHA in the workflow; migrate config. Until then, re-run `init` |
+| `rotate-secret` | **v2** | Write a new API key or OAuth token to the matching repo secret (and optional local cache). Until then, re-run `init` |
+| `apply-protection` | **v2** | Gate-only: add the `revieweragent` required check (RMW + verify). **Only** after the workflow exists on the default branch. v1 prints these steps instead (§13) |
 
-Deferred commands are specified in full below (§13, §15, §16) so the v1
-implementations do not paint them into a corner. See §0 for the rationale.
+v2 commands are specified in full below (§13, §15, §16) so the v1
+implementations do not paint them into a corner. See §0.
 
 ```
 npx revieweragent init \
@@ -262,10 +277,11 @@ Interactive (default):
 2. **Agent or Model?**
    - **Agent** — subscription / login tools. List underneath is the
      registry-filtered `subscription-oauth` providers. v1: **Claude**
-     (Claude Code). Later: Cursor, GitHub Copilot, other agent tools.
+     (Claude Code). v2: **Cursor**. v3: GitHub Copilot, other agent tools.
    - **Model** — API keys. List underneath is the registry-filtered
-     `api-key` providers. v1: **Claude** (Console). Later: OpenAI, Gemini.
-3. **Pick a provider** from that list. v1: one entry (Claude). Then acquire
+     `api-key` providers. v1: **Claude** (Console). v3: OpenAI, Gemini.
+3. **Pick a provider** from that list. v1: one entry (Claude). v2: Claude
+   and Cursor (Agent list). Then acquire
    the credential for that provider + category:
    - Agent / Claude: installer **spawns `claude setup-token` itself** as a
      subprocess (stdin/stderr inherited so the browser-login prompt and URL
@@ -304,7 +320,7 @@ Interactive (default):
      (`revieweragent`) and a link to the repo's branch-protection / rulesets
      settings, to be flipped *after* the workflow lands on the default
      branch.
-   - **Later:** same instructions, plus `npx revieweragent apply-protection`
+   - **v2:** same instructions, plus `npx revieweragent apply-protection`
      (§13) to do it automatically.
 
 UI: `@clack/prompts` — arrow-key selects, paste-safe masked input, spinners,
@@ -534,12 +550,12 @@ for anyone with merge rights.
 
 ### `CODEOWNERS` (recommended)
 
-> **v1: print only.** Init shows the block below and explains why it matters.
+> **v1: print only. v2: write.** Init shows the block below and explains why it matters.
 > The user copies it. Do **not** create, append, or edit `CODEOWNERS` in v1
 > — that file governs review routing for the whole repo and this tool does
 > not own it.
 
-**Later (when writing is enabled):** append inside a managed marker block,
+**v2 (when writing is enabled):** append inside a managed marker block,
 requiring review from the installing GitHub user (or a team they name):
 
 ```
@@ -550,7 +566,7 @@ requiring review from the installing GitHub user (or a team they name):
 # revieweragent:end
 ```
 
-- **Later only:** File missing → create it with the block (confirm). File
+- **v2 only:** File missing → create it with the block (confirm). File
   exists without the marker → append the block (confirm). Do not rewrite
   other rules. File exists with the marker → replace only the block.
   Non-interactive: `--codeowners @USER` or `--no-codeowners` (default skip).
@@ -571,7 +587,7 @@ Runs only in GitHub Actions. Local invocation without Actions env exits 1.
    success — do not rely on job-level `if:` as the gate). See §9 for the
    exact skip vs. no-op rules.
 3. Load `.revieweragent.yml` + instructions from the workspace (base).
-4. **`merge_group`** — *not in v1* (§0). v1 omits `merge_group` from the
+4. **`merge_group`** — *not in v1; ships in v2* (§0). v1 omits `merge_group` from the
    `on:` block entirely; merge-queue repos get PR-time review only. Shipping
    the trigger without the reuse logic below would double model spend per
    merge, so it is all-or-nothing.
@@ -768,7 +784,7 @@ on:
     types: [opened, synchronize, ready_for_review]
   issue_comment:
     types: [created]
-  merge_group:          # NOT in v1 — omit this line (§0, §8 step 4)
+  merge_group:          # NOT in v1 — v2 (§0, §8 step 4)
 ```
 
 v1 emits the block without `merge_group`. It is listed here because the rest
@@ -867,7 +883,8 @@ jobs:
       actions: read           # per-actor hourly cap (§8 step 5)
 ```
 
-No `issues: write` unless a later version replies in-thread. No `contents: write`.
+v1.1.0 added `issues: write` for review start/complete comments on the
+timeline. Threaded in-conversation replies are undesigned (**v3**). No `contents: write`.
 No `actions: write` (`actions: read` is required for the cap; write is not).
 
 ### What makes `pull_request_target` safe **here**
@@ -1069,7 +1086,7 @@ If a `verdict` key appears anyway, **ignore it**.
 
 ## 13. Branch protection / rulesets (gate mode only)
 
-> **v1: manual.** None of the automation below ships in v1 (§0). Gate mode
+> **v1: manual. v2: `apply-protection`.** None of the automation below ships in v1 (§0). Gate mode
 > still emits the `revieweragent` check run — `init` prints the exact check
 > name and a link to the branch-protection / rulesets settings page, and the
 > user flips the required-check toggle. This section specifies
@@ -1191,7 +1208,7 @@ requires `--yes`.
 
 ## 16. Upgrade (`npx revieweragent upgrade`)
 
-> **Not in v1** (§0). Re-running `init` already rewrites managed files under
+> **v2** (§0). Re-running `init` already rewrites managed files under
 > the same marker rules; `upgrade` exists to do that without re-prompting and
 > to migrate config across schema versions. Specified here so v1's file
 > markers and `version:` field are built to support it.
@@ -1214,14 +1231,16 @@ requires `--yes`.
 ## 17. Locked decisions summary
 
 These are the **product** decisions. They hold across releases; §0 says which
-ship in v1. A row appearing here does not mean it is in the first release.
+ship in v1, v2, or v3. A row appearing here does not mean it is in the first release.
 
 | Area | Decision |
 |---|---|
 | **v1 scope** | `init` + `review` + `uninstall`; advisory **and** gate; manual branch protection; no `merge_group`. See §0 |
+| **v2 scope** | `upgrade`, `rotate-secret`, `apply-protection`; Cursor Agent row; CODEOWNERS write; `merge_group` check reuse; OS keychain. See §0 |
+| **v3 scope** | Undesigned. Other git hosts, Copilot/OpenAI/Gemini, org-wide rollout, dashboard, multi-provider. See §18 |
 | Name | `revieweragent`, npm |
-| Platforms | GitHub v1; GitLab, Bitbucket, Azure DevOps sequential; **platform port from day one** |
-| Provider | Registry-driven; v1 live row = Claude; one active provider per repo |
+| Platforms | GitHub v1; GitLab, Bitbucket, Azure DevOps **v3**; **platform port from day one** |
+| Provider | Registry-driven; v1 live row = Claude; v2 live Agent row = Cursor; one active provider per repo |
 | Setup prompt | **Agent or Model?** then registry-filtered provider list |
 | Auth | Agent → `subscription`; Model → `api-key` |
 | Subscription token | `claude setup-token`, ~1 year, CI via Claude Code CLI, no tools |
@@ -1236,10 +1255,10 @@ ship in v1. A row appearing here does not mean it is in the first release.
 | `GITHUB_TOKEN` | Review step's `env:` must set it explicitly (`${{ secrets.GITHUB_TOKEN }}`) — not auto-injected into a JS action's `process.env` — corrected after live testing (§7) |
 | Subscription CLI provisioning | Workflow installs pinned `@anthropic-ai/claude-code` via plain `npm install -g` before the review step (auth: subscription only) — corrected after live testing found this step was missing entirely, causing a silent false-pass (§7). `actions/cache` caching is follow-up work, not v1 |
 | Third-party review action | None. `claude-code-action` blocks non-write actors, which kills `fork_policy: auto` — verified, see §7 |
-| Config | `.revieweragent.yml` with `version: 1`; CODEOWNERS **printed** in v1, written later |
+| Config | `.revieweragent.yml` with `version: 1`; CODEOWNERS **printed** in v1, written in v2 |
 | Instructions | `.revieweragent/instructions.md` from **base** |
 | `CLAUDE.md` | Not written; not used as config |
-| Events | v1: `pull_request_target` + gated `issue_comment`. `merge_group` later |
+| Events | v1: `pull_request_target` + gated `issue_comment`. `merge_group` in v2 |
 | `pull_request` event | Not used |
 | Draft PRs | Skipped via job-level `if:` — job does not run at all (corrected after live testing; §9) |
 | Concurrency | Cancel-in-progress; PR number **or** issue number **or** merge-group SHA |
@@ -1260,36 +1279,35 @@ ship in v1. A row appearing here does not mean it is in the first release.
 | `on_limit` | Advisory only; **gate always blocks** on over-limit |
 | Diff limits | `max_diff_lines` / `max_prompt_tokens` + default excludes |
 | Idempotency | `pr_number + head_sha`; never dismiss COMMENT reviews |
-| `merge_group` | Not in v1. Later: reuse PR-head check when possible |
-| Branch protection | v1: **manual** after workflow is on default branch. Later: `apply-protection` RMW + verify |
+| `merge_group` | Not in v1. **v2:** reuse PR-head check when possible |
+| Branch protection | v1: **manual** after workflow is on the default branch. **v2:** `apply-protection` RMW + verify |
 | Permissions | `permissions: {}` then contents read, PR write, checks write, **actions read** |
 | Setup UI | `@clack/prompts`; engine works `--non-interactive` |
-| Commands | v1: `init`, `review`, `uninstall`. Later: `upgrade`, `rotate-secret`, `apply-protection` |
+| Commands | v1: `init`, `review`, `uninstall`. v2: `upgrade`, `rotate-secret`, `apply-protection` |
 | gh CLI | Optional; OS-specific install or PAT with **split** scopes |
 | CI separation | Separate workflow from lint/build/test |
 | Subscription CLI in Actions | **Verified end-to-end against a real repo, 2026-08-19** — real PR, real review posted, real gate check. See §7's job-id/check-name/CLI-provisioning corrections found in that same pass |
 
 ---
 
-## 18. Future work (not specified)
+## 18. v3 — Future work (not specified)
 
-Distinct from §0, which defers **specified** work to a later release. The
-items here have no design yet — reaching one means opening a fresh set of
-questions, not implementing something already decided.
+Distinct from §0 **v2**, which is specified follow-on work. The items here
+have no design yet — reaching one means opening a fresh set of questions,
+not implementing something already decided.
 
-Near-term, specified, deferred → §0 (`upgrade`, `rotate-secret`,
-`apply-protection`, `merge_group` reuse, CODEOWNERS writing).
+**v2 (specified)** → §0: `upgrade`, `rotate-secret`, `apply-protection`,
+`merge_group` reuse, CODEOWNERS writing, OS keychain, **Cursor** Agent row.
 
-- Light up registry rows: Cursor, GitHub Copilot (distinct auth path),
+- Light up remaining registry rows: GitHub Copilot (distinct auth path),
   OpenAI, Gemini. Still one active provider per repo until a later decision.
 - GitLab, Bitbucket, Azure DevOps implementations of the platform port.
 - Monorepo subdirectory scoping (path include filters beyond `exclude`).
 - Org-wide / batch rollout (`--org` loop).
 - Usage dashboard (Anthropic spend vs Actions minutes).
 - Org-level secret as an install option.
-- In-thread replies / `issues: write`.
 - Simultaneous multi-provider workflows in one repo.
-- OS keychain for the local credential cache (replacing plaintext `0600`).
+- Tuned / adaptive fork rate limiting (v1 keeps the simple hourly cap).
 
 Installer warns at init that private-repo Actions minutes and Anthropic /
 subscription spend are separate bills, and that default `fork_policy: auto`
