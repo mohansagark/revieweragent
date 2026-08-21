@@ -326,14 +326,16 @@ reviewed.
 - The repository already exists on GitHub with a valid remote; repo
   creation is out of scope.
 - v1 targets GitHub only. GitLab, Bitbucket, and Azure DevOps support are
-  out of scope for this spec.
-- The following are explicitly out of scope for this spec (deferred beyond
-  v1 per the source design): `upgrade` and `rotate-secret` commands,
-  automatic branch-protection application (`apply-protection`),
-  `merge_group` (merge-queue) event handling, automatic CODEOWNERS file
-  writing, OS-keychain credential storage, and tuned/adaptive fork
-  rate-limiting. `init`/`review`/`uninstall` are built so these can be
-  added later without redesign, but none of them are functional
-  requirements of this spec.
+  **v3** (undesigned) in the product spec.
+- The following are explicitly out of scope for this v1 spec:
+  - **v2** in `SPEC.md` §0: `upgrade` and `rotate-secret`, automatic
+    branch-protection application (`apply-protection`), `merge_group`
+    (merge-queue) event handling, automatic CODEOWNERS file writing,
+    OS-keychain credential storage, and Cursor as a second Agent provider
+    (`SPEC.md` §3 / §8).
+  - **v3** in `SPEC.md` §0 / §18: tuned / adaptive fork rate-limiting
+    (v1 keeps the simple hourly cap).
+  `init`/`review`/`uninstall` are built so these can be added without
+  redesign, but none of them are functional requirements here.
 - Multiple AI providers active simultaneously on the same repo, and
   reviewing non-GitHub-hosted repos, are both out of scope.

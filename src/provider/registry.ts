@@ -1,7 +1,9 @@
-// SPEC.md §3 — registry-driven provider list. v1 has exactly one live
-// row (Claude); planned rows exist as data (status: "planned") so the
-// installer core does not get rewritten when they light up, but they are
-// never shown as fake disabled menu items in v1.
+// SPEC.md §3 — registry-driven provider list. v1 live row: Claude.
+// v2 lights up Cursor (Agent, subscription-oauth category, CURSOR_API_KEY).
+// v3: Copilot / OpenAI / Gemini.
+// Planned rows may exist as data (status: "planned") so the installer core
+// is not rewritten when they light up; they are not shown as menu items
+// until their release.
 
 export type AuthMethodType = "subscription-oauth" | "api-key";
 

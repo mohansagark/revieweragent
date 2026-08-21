@@ -57,7 +57,8 @@ name into branch protection yourself — v1 does not apply protection rules.
 ### Forks
 
 Default `fork_policy` is `auto`: PRs from forks are reviewed, with a per-actor hourly
-cap. `--fork-policy off` skips fork PRs. `--fork-policy on` reviews them with no cap.
+cap. The other value is `comment-gated` (only a write-access `/review` on a fork PR).
+There is no `--fork-policy off|on` flag — edit `.revieweragent.yml`.
 
 ## Uninstall
 
@@ -67,19 +68,24 @@ npx revieweragent uninstall
 
 Removes the workflow, local config, and the GitHub secret this installer created.
 
-## Review locally (optional)
+## Review runs in GitHub Actions only
 
-```bash
-npx revieweragent review --pr 42
-```
+There is no `npx revieweragent review --pr`. After init, opening a PR is enough.
+`review` is the bundled `actions/review` entrypoint; running it outside Actions
+exits 1.
 
-Same engine as CI. Needs the same GitHub token and Claude/Anthropic credentials.
+Each review attempt posts start and complete timeline comments with
+`Verdict: PASS | BLOCK | SKIPPED | FAILED`. Those comments are not the merge
+gate — the GitHub Check named `revieweragent` is.
 
 ## What v1 does not do
 
-- Does not apply branch protection or merge-queue rules
+These are **v2** (already specified) unless noted:
+
+- Does not apply branch protection or merge-queue rules (`apply-protection`, `merge_group`)
 - Does not write `CODEOWNERS` (it prints a snippet you can paste)
 - Does not ship `upgrade`, `rotate-secret`, or `apply-protection`
+- Does not offer Cursor (v2; Dashboard API key, not Copilot) or other git hosts / Copilot / OpenAI / Gemini (v3)
 
 ## Upgrade
 
