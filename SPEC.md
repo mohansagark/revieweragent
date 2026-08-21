@@ -1021,10 +1021,14 @@ jobs:
       pull-requests: write    # Reviews API COMMENT
       checks: write           # check run on head SHA
       actions: read           # per-actor hourly cap (§8 step 5)
+      issues: write           # v1.1.0 timeline start/complete comments
 ```
 
-v1.1.0 added `issues: write` for review start/complete comments on the
-timeline. Threaded in-conversation replies are undesigned (**v3**). No `contents: write`.
+`issues: write` shipped in **v1.1.0** for the start/complete timeline
+comments (`revieweragent-progress:start` / `complete`). It is already in
+the generated workflow (`src/cli/write-workflow.ts`) and this repo's
+dogfood workflow. Threaded in-conversation *replies* to inline review
+comments are still undesigned (**v3**). No `contents: write`.
 No `actions: write` (`actions: read` is required for the cap; write is not).
 
 ### What makes `pull_request_target` safe **here**
@@ -1461,7 +1465,7 @@ ship in v1, v2, or v3. A row appearing here does not mean it is in the first rel
 | Idempotency | `pr_number + head_sha`; never dismiss COMMENT reviews |
 | `merge_group` | Not in v1. **v2:** reuse PR-head check when possible |
 | Branch protection | v1: **manual** after workflow is on the default branch. **v2:** `apply-protection` RMW + verify |
-| Permissions | `permissions: {}` then contents read, PR write, checks write, **actions read** |
+| Permissions | `permissions: {}` then contents read, PR write, checks write, **actions read**, **issues write** (v1.1.0 timeline comments) |
 | Setup UI | `@clack/prompts`; engine works `--non-interactive` |
 | Commands | v1: `init`, `review`, `uninstall`. v2: `upgrade`, `rotate-secret`, `apply-protection` |
 | gh CLI | Optional; OS-specific install or PAT with **split** scopes |
@@ -1489,6 +1493,9 @@ Agent row (§3 / §8).
 - Org-level secret as an install option.
 - Simultaneous multi-provider workflows in one repo.
 - Tuned / adaptive fork rate limiting (v1 keeps the simple hourly cap).
+- Threaded in-conversation replies to inline comments (`issues: write` for
+  start/complete timeline comments already shipped in v1.1.0; replies are
+  a separate undesigned surface).
 
 Installer warns at init that private-repo Actions minutes and Anthropic /
 subscription spend are separate bills, and that default `fork_policy: auto`
