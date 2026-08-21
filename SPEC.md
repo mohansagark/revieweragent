@@ -42,7 +42,7 @@ follow-on work is **v2**. Work with no design yet is **v3** — not an unnamed
 | Modes | advisory **and** gate — both emit the `revieweragent` check run | — | — |
 | Branch protection (§13) | **manual.** Print the exact check name + settings link; user flips it | auto RMW + verify via `apply-protection` | — |
 | Auth paths | both (`subscription`, `api-key`) | — | Copilot-style GitHub-seat auth (distinct path) |
-| Agent providers (§3) | Claude (Claude Code) | **Cursor** (same `subscription-oauth` registry shape; write the Cursor auth/CI spec before code) | GitHub Copilot, other agents |
+| Agent providers (§3) | Claude (Claude Code) | **Cursor** (Agent / `subscription-oauth` category; Dashboard API key + `agent --mode ask`, §3 / §8) | GitHub Copilot, other agents |
 | Model providers (§3) | Claude (Console API key) | — | OpenAI, Gemini |
 | Local credential cache | yes — plaintext `0600` | OS keychain | — |
 | Fork policy | `auto` default + simple per-actor hourly cap | — | tuned / adaptive rate limiting |
@@ -53,9 +53,10 @@ follow-on work is **v2**. Work with no design yet is **v3** — not an unnamed
 
 **v2 Cursor.** The installer registry already has a planned Agent row. v2
 lights it up next to Claude. Cursor stays on the existing
-`subscription-oauth` shape — not Copilot's GitHub-seat path. Specify the
-Cursor credential + CI backend in a v2 spec before implementing; that
-missing write-up does **not** slip Cursor to v3.
+`subscription-oauth` **registry category** (Agent / plan-billed) — not
+Copilot's GitHub-seat path, and not a Model/`api-key` row. The Cursor
+credential is a **Dashboard API key** (`CURSOR_API_KEY`), not an OAuth
+token from `agent login`. Auth/CI is locked in §3 and §8.
 
 **Why gate mode still shipped in v1.** Emitting a check run and marking it
 `failure` is cheap — the runner already computes PASS/BLOCK. What is expensive
@@ -152,14 +153,14 @@ list** for that category.
 
 A provider with no method in the chosen category is omitted from that list.
 v1 lists one row either way: **Claude**. v2 adds **Cursor** as a second Agent
-row. Planned rows stay in the registry as `status: planned` so the installer
-core is not rewritten when they light up; they are **not** shown as fake
-disabled menu items until their release.
+row (no Model path). Planned rows stay in the registry as `status: planned`
+so the installer core is not rewritten when they light up; they are **not**
+shown as fake disabled menu items until their release.
 
 **GitHub Copilot** does not fit this auth shape (seat/license on a GitHub
 account, not a portable OAuth token or API key). That is **v3** — a distinct
 integration path, not just a new registry row. Flag that in the registry
-entry.
+entry. Cursor is **not** Copilot.
 
 ### Claude v1 backends (the only live row)
 
@@ -205,17 +206,143 @@ OS keychain (`keytar` / macOS Keychain / libsecret) was considered and
 **rejected for v1** — extra native deps, broken under headless/`npx` on
 Linux CI jump hosts, and the cache is optional (user can decline). Revisit
 post-v1. Do not store the token in `~/.claude/` (Claude Code does not save
-`setup-token` output; we must not pretend it does).
+`setup-token` output; we must not pretend it does). Do not store a Cursor
+key in `~/.cursor/` (that is Cursor's own CLI login store; CI must not
+read it).
 
-**Acquisition, recorded:** a temp-file handoff (write the token to disk after
-browser auth, read it back, delete when done) was considered and **rejected**.
-Even with cleanup, it leaves a live long-lived credential on disk that
-survives a crash mid-setup, and is exposed to other local processes/users and
-backup/indexing services in that window. Capturing it directly from the
-`setup-token` subprocess's own output — in memory, no disk write — gets the
-same "no manual copy-paste" UX with none of that exposure. This is also the
-documented intended use: Anthropic describes `setup-token` output as
-script-consumable, not eyeball-only (§3).
+### Cursor v2 backend (Agent row)
+
+Cursor is a second **Agent** provider. Config:
+
+```
+provider: cursor
+auth: subscription
+```
+
+`auth: api-key` with `provider: cursor` is **invalid** — refuse at init and
+fail-closed in CI. Cursor has no Model/Console row in v2.
+
+| Auth path | Prompt category | Who it's for | CI backend |
+|---|---|---|---|
+| `subscription` | Agent | Cursor Pro / Business / Enterprise (personal or **team service-account** key) | Cursor CLI (`agent`), `CURSOR_API_KEY`, **ask mode**, empty workspace, **no `--force`** |
+
+**Credential.** Cursor's documented CI path is an **API key**, not browser
+login. Generate from [Cursor Dashboard → API Keys](https://cursor.com/dashboard/api)
+(user key) or a **team service account** key (preferred when the install
+is for a team — usage is billed to the team, not one person's seat).
+Init: masked paste, or reuse local cache. Non-interactive:
+`--cursor-api-key` or env `CURSOR_API_KEY`. Do **not** spawn `agent login`
+and scrape a token — that flow stores credentials in Cursor's local
+login store and does not print a CI-usable key. Do **not** copy files out
+of `~/.cursor/`.
+
+**Secret names.**
+
+| Item | Cursor `subscription` |
+|---|---|
+| GitHub Actions secret | `REVIEWERAGENT_CURSOR_API_KEY` |
+| Job env var | `CURSOR_API_KEY` |
+
+Exactly one credential in the job, matching `provider` + `auth`. Cursor
+installs never set `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
+Switching provider deletes the unused secret after confirm (§11).
+
+**Not used.** Cursor **Cloud Agents** (GitHub app, repo-checkout agents,
+`agent worker`). Those have tools and operate on a checkout. This product
+reviews a diff as data through the same `review` runner as Claude.
+
+**CLI binary.** `agent` (not `cursor-agent`). Pin a **versioned tarball**
+at implement time from Cursor's download CDN (observed pattern:
+`https://downloads.cursor.com/lab/<version>/linux/<arch>/agent-cli-package.tar.gz`).
+Record `version` + `sha256` in the package. Workflow extracts that
+tarball and invokes the binary by absolute path.
+
+Never:
+
+- `curl https://cursor.com/install | bash` (unpinned)
+- `agent update` in CI (auto-update)
+- GitHub Actions docs that put the binary in `$HOME/.cursor/bin` (the
+  installer actually uses `$HOME/.local/bin` — do not copy that example)
+
+If Cursor stops publishing a checksummable versioned artifact, the
+registry row stays `planned` and does not ship.
+
+**Locked argv** (load-bearing; same class as Claude's `--tools ""`):
+
+```
+agent -p --output-format json \
+  --mode ask \
+  --sandbox enabled \
+  --trust \
+  --model <pinned id> \
+  --workspace "<empty temp dir>" \
+  "<package-owned system prompt + sanitized payload>"
+```
+
+Spawn via Node, `stdin: "ignore"`. Auth is **only** `CURSOR_API_KEY` in
+the child env — do **not** pass `--api-key` on the argv (`ps` leakage).
+Do **not** pass: `--force`, `--yolo`,
+`--approve-mcps`, `--worktree`, `--plugin-dir`, `--plan`. `--print` /
+`-p` is documented as having write and shell tools in **agent** mode;
+`--mode ask` is the documented read-only mode (no file edits). `--force`
+is what applies edits — never pass it.
+
+**Empty `--workspace`.** Cursor CLI auto-loads `.cursor/rules`,
+`AGENTS.md`, `CLAUDE.md`, and `mcp.json` from the workspace. The review
+job's GitHub checkout is the **base** branch, which is trusted for
+*config* but is still an instruction surface this product does not own
+(§7: do not put gate config in `CLAUDE.md`). Point `--workspace` at a
+fresh empty temp directory so those files are not loaded. The sanitized
+diff is **only** in the prompt argument, never written into that
+workspace (a read tool would otherwise see unsanitized copies). Config
+and `instructions.md` stay read by *our* runner from the Actions
+checkout, then prepended onto the prompt as today.
+
+**No `--json-schema`.** Cursor's `--output-format json` emits a wrapper
+`{ type, subtype, is_error, result }` where `result` is **assistant
+text**, not a schema-constrained object. Parse `result` the same way as
+the Claude `api-key` path: optional markdown fence, then §12 JSON.
+Never treat the wrapper's `subtype: "success"` as a PASS. Cursor docs:
+on failure the process exits non-zero, writes stderr, and **emits no
+JSON** — classify from exit code + stderr (§8 error table). If exit 0
+and `is_error: true`, fail-closed (same trap as Claude).
+
+**Model pin.** Pass `--model` with an explicit id recorded in the
+registry at implement time (`agent models` / `--list-models` on that
+CLI version). Never omit it (Cursor documents auto model routing).
+
+**Error class.** Same outsider test as Claude subscription:
+
+| Signal | Gate class |
+|---|---|
+| Missing `CURSOR_API_KEY` / 401 / 403 | Fail-closed |
+| 429 / overload 5xx | Availability skip |
+| Plan/quota exhaustion that refills (fork-burnable) | Availability skip |
+| Invalid / missing findings JSON, no quota signal | Fail-closed |
+| Cursor CLI tarball fetch fail | Availability skip (same as Claude npm install fail) |
+
+**Implementation gate.** Before lighting up the row, run the argv above
+**in GitHub Actions** with only `CURSOR_API_KEY` set, empty workspace,
+and assert: zero file writes in the Actions checkout, zero tool calls
+that touch the checkout, schema-conforming findings from `result`. If
+ask-mode still writes files, still loads MCP, or cannot produce §12 JSON
+reliably, leave `status: planned`. Do not weaken "no tools" to ship it.
+
+**Init copy.** Key is billed to the Cursor plan (personal or team
+service account); repo admins inherit it; `fork_policy: auto` on a
+public repo reviews fork PRs against that quota; rotate with
+`rotate-secret`.
+
+**Acquisition, recorded (Claude only):** a temp-file handoff (write the token
+to disk after browser auth, read it back, delete when done) was considered
+and **rejected**. Even with cleanup, it leaves a live long-lived credential
+on disk that survives a crash mid-setup, and is exposed to other local
+processes/users and backup/indexing services in that window. Capturing it
+directly from the `setup-token` subprocess's own output — in memory, no
+disk write — gets the same "no manual copy-paste" UX with none of that
+exposure. Anthropic describes `setup-token` output as script-consumable,
+not eyeball-only. **Cursor has no equivalent printable CLI token** —
+dashboard masked paste is the acquire path.
 
 ---
 
@@ -250,10 +377,11 @@ Non-interactive `init` requires GitHub auth (`gh` logged in, or `GH_TOKEN` /
 `GITHUB_TOKEN` with the scopes in §5) **and** the matching credential:
 
 - `--auth api-key` (Model) → `ANTHROPIC_API_KEY` or `--api-key`
-- `--auth subscription` (Agent) → `CLAUDE_CODE_OAUTH_TOKEN` or `--oauth-token`
+- `--auth subscription` (Agent / Claude) → `CLAUDE_CODE_OAUTH_TOKEN` or `--oauth-token`
   (already minted; non-interactive cannot open the `setup-token` browser)
+- `--provider cursor --auth subscription` → `CURSOR_API_KEY` or `--cursor-api-key`
 - `--provider` required when the chosen category has more than one live
-  registry row (v1: only `claude`)
+  registry row (v1: only `claude`; v2 Agent: `claude` or `cursor`)
 
 Missing inputs → exit 1 with a machine-readable error, no prompts.
 
@@ -291,20 +419,23 @@ Interactive (default):
      as an in-memory value, never written to a file. See §11 for why this
      replaces an earlier temp-file design. Reuse local cache if present
      (skips the subprocess entirely).
+   - Agent / Cursor: masked paste of the Dashboard / service-account API
+     key, or reuse cache. Offer to open `https://cursor.com/dashboard/api`.
+     Do not run `agent login`.
    - Model / Claude: masked paste of the Console API key, or reuse cache.
 4. Dependency checks (§6), confirm-gated fixes. If `gh` is present but not
    authenticated, run `gh auth login` (its own browser/device-code flow —
    same class of unavoidable identity step as `setup-token` or a PAT, just
    via GitHub instead of Anthropic). Agent / Claude also
    requires the `claude` CLI for `setup-token` at install time (CI installs
-   a pinned CLI itself; see §8). Before writing secrets, **subscription**
-   init prints: token lasts ~one year; quota is shared with interactive
-   Claude Code; repo admins inherit this personal credential; the CI pin is
-   Sonnet with discovery disabled (~18× cheaper than unpinned Opus — §8).
-   Public-repo installs also warn that `fork_policy: auto` (the default)
-   reviews every fork PR and shares that quota. Gate mode in v1 **emits**
-   the check but does **not** require it until the user flips settings
-   after the workflow is on the default branch.
+   a pinned CLI itself; see §8). Agent / Cursor does **not** require `agent`
+   at init. Before writing secrets, print the matching §3 init copy
+   (Claude: ~one-year token, shared Claude Code quota, Sonnet pin;
+   Cursor: plan-billed Dashboard / service-account key, shared Cursor
+   quota). Public-repo installs also warn that `fork_policy: auto` (the
+   default) reviews every fork PR and shares that quota. Gate mode in v1
+   **emits** the check but does **not** require it until the user flips
+   settings after the workflow is on the default branch.
 5. Advisory or gate mode? If gate: severity threshold (default `high`).
 6. Push/update the repo secret (§11).
 7. Write files (§7). **v1:** print the CODEOWNERS recommendation rather than
@@ -335,8 +466,9 @@ connected steps, intro/outro banner. No raw-stdin handling.
 | Node.js + npm | Running `npx revieweragent` | Hard prerequisite |
 | git | Target must be a git repo | Hard prerequisite |
 | `gh` CLI | Secrets, repo metadata, protection APIs | **Optional.** If missing: (a) OS-specific install command shown and confirm-gated (`brew` / `apt` / `winget` — never a guessed command), or (b) PAT / `GH_TOKEN` and REST. If **present but not authenticated**, run `gh auth login` (browser/device-code) — a real identity step, not skippable, but only reached in the common case, not the PAT fallback. |
-| `claude` CLI | `setup-token` during **subscription** init only | Missing → confirm-gated install via `npm install -g @anthropic-ai/claude-code` (OS npm prefix / sudo called out). Not required for `api-key` init. CI uses a pinned copy, not the operator's global CLI. |
-| Network | npm (init + cold-cache Claude CLI), api.github.com, api.anthropic.com | Review **runner** is SHA-pinned from GitHub, not downloaded from npm per event. See §7 / §9 availability. |
+| `claude` CLI | `setup-token` during **Claude subscription** init only | Missing → confirm-gated install via `npm install -g @anthropic-ai/claude-code` (OS npm prefix / sudo called out). Not required for `api-key` or Cursor init. CI uses a pinned copy, not the operator's global CLI. |
+| Cursor `agent` CLI | **Not** required at init (key is pasted). Required in CI for `provider: cursor` | CI installs a pinned tarball (§3). Init does not install `agent`. |
+| Network | npm (init + cold-cache Claude CLI), api.github.com, api.anthropic.com, Cursor API (cursor installs) | Review **runner** is SHA-pinned from GitHub, not downloaded from npm per event. Cursor CLI tarball is checksum-pinned (§3). See §7 / §9 availability. |
 | Repo access | Secrets: metadata write. Protection: admin. | Checked upfront; fall back to printed instructions + settings links |
 | GitHub Actions enabled | Whole product | Checked; warn if org policy disabled it |
 
@@ -448,10 +580,14 @@ a settings/rulesets link.
 - Pass **exactly one** credential into the job env, matching `auth` in
   `.revieweragent.yml`:
 
-  - `api-key` → `ANTHROPIC_API_KEY: ${{ secrets.REVIEWERAGENT_ANTHROPIC_API_KEY }}`
-  - `subscription` → `CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}`
+  - `api-key` + Claude → `ANTHROPIC_API_KEY: ${{ secrets.REVIEWERAGENT_ANTHROPIC_API_KEY }}`
+  - `subscription` + Claude → `CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}`
+  - `subscription` + Cursor → `CURSOR_API_KEY: ${{ secrets.REVIEWERAGENT_CURSOR_API_KEY }}`
 
-  Never both.
+  Never two of these. Cursor jobs skip the Claude CLI install step and
+  instead extract the pinned Cursor CLI tarball (§3) before the review
+  step. Tarball fetch failure is an **availability skip**, same as Claude
+  npm install failure.
 
 #### Why not `anthropics/claude-code-action` (verified, not assumed)
 
@@ -498,8 +634,8 @@ never from PR head.
 ```yaml
 # Managed by revieweragent — schema version below is required.
 version: 1
-provider: claude
-auth: subscription      # subscription | api-key
+provider: claude            # claude | cursor
+auth: subscription          # subscription | api-key (cursor: subscription only)
 mode: advisory          # advisory | gate
 block_severity: high    # any | critical | high | medium | low
 max_diff_lines: 4000
@@ -645,10 +781,10 @@ Runs only in GitHub Actions. Local invocation without Actions env exits 1.
      check `failure` (still not a required check in advisory).
 7. Call the model with **no tools**, package-owned system prompt (§10),
    user payload = sanitized title/body/diff inside delimiters. Backend is
-   selected by `auth` in `.revieweragent.yml`:
+   selected by `provider` + `auth` in `.revieweragent.yml`:
 
-   - **`api-key`:** HTTP Anthropic Messages API using `ANTHROPIC_API_KEY`.
-   - **`subscription`:** Claude Code CLI in print mode using
+   - **Claude `api-key`:** HTTP Anthropic Messages API using `ANTHROPIC_API_KEY`.
+   - **Claude `subscription`:** Claude Code CLI in print mode using
      `CLAUDE_CODE_OAUTH_TOKEN`. Pin `@anthropic-ai/claude-code` (exact
      version shipped with this package). **Verified argv** (see below):
 
@@ -668,7 +804,11 @@ Runs only in GitHub Actions. Local invocation without Actions env exits 1.
      (`spawn(..., { stdin: "ignore" })` or equivalent). Do not rely on
      shell `< /dev/null` — that stall comes back if stdin is inherited.
 
-   Same schema, same evaluator, either backend.
+   - **Cursor `subscription`:** Cursor CLI argv in §3. Parse the JSON
+     wrapper's `result` string (fence-strip) as §12 findings. Same
+     evaluator. Same "no PR-head checkout."
+
+   Same schema, same evaluator, every backend.
 
 #### Verified CLI behavior (`claude` 2.1.235, tested end-to-end)
 
@@ -769,8 +909,8 @@ does not depend on it.
     `Review skipped`.
 
 The runner never: checkouts PR head, runs `npm install` in the target,
-follows Makefiles, loads target linters, or enables Claude Code tools
-(subscription backend is inference-only).
+follows Makefiles, loads target linters, or enables model tools
+(Claude `--tools ""`; Cursor `--mode ask` + empty `--workspace`).
 
 ---
 
@@ -1008,15 +1148,16 @@ delimiters. It cannot disable schema validation or the code-side gate.
 
 ## 11. Secret lifecycle
 
-One auth method per repo. Init writes **one** of the two secrets. Switching
-auth on re-init deletes the unused name (after confirm) and PUTs the new one.
+One auth method per repo. Init writes **one** secret. Switching
+auth **or provider** on re-init deletes the unused name (after confirm) and
+PUTs the new one.
 
-| Item | `api-key` | `subscription` |
-|---|---|---|
-| GitHub Actions secret name | `REVIEWERAGENT_ANTHROPIC_API_KEY` | `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` |
-| Job env var | `ANTHROPIC_API_KEY` | `CLAUDE_CODE_OAUTH_TOKEN` |
-| Acquire | Paste Console key | `claude setup-token` (browser) then paste; 1-year token |
-| Local cache | `~/.config/revieweragent/credentials.json` (`0600`), optional | Same file, `auth` + token fields |
+| Item | Claude `api-key` | Claude `subscription` | Cursor `subscription` |
+|---|---|---|---|
+| GitHub Actions secret name | `REVIEWERAGENT_ANTHROPIC_API_KEY` | `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` | `REVIEWERAGENT_CURSOR_API_KEY` |
+| Job env var | `ANTHROPIC_API_KEY` | `CLAUDE_CODE_OAUTH_TOKEN` | `CURSOR_API_KEY` |
+| Acquire | Paste Console key | `claude setup-token` (browser); 1-year token | Paste Dashboard / service-account key |
+| Local cache | `~/.config/revieweragent/credentials.json` (`0600`) in v1; OS keychain in v2 (§11.1) | same | same |
 
 Shared rules:
 
@@ -1025,17 +1166,56 @@ Shared rules:
 | Scope | Per-repo Actions secret, not org-level by default |
 | Create | Encrypt with repo public key, PUT secret |
 | Re-init, same value | Leave secret as-is |
-| Re-init, new value / `rotate-secret` | PUT overwrite. Subscription rotate re-runs `setup-token` (or `--oauth-token` in non-interactive) |
+| Re-init, new value / `rotate-secret` | PUT overwrite. Claude subscription rotate re-runs `setup-token` (or `--oauth-token` in non-interactive). Cursor rotate is a new pasted key (or `--cursor-api-key`) |
 | Logs | Never echo. Mask if a debug path would print env |
 | Expiry / 401 / 403 | Fail-closed in gate (§9) |
 | 429 / 400 credit / overload / 5xx | Availability skip, **not** fail-closed (§9) |
-| Auth or provider change | Overwrite workflow env + config `auth:`; DELETE the old secret name; PUT the new |
+| Auth or provider change | Overwrite workflow env + config `provider` / `auth`; DELETE the old secret name; PUT the new |
 | Uninstall | Prompt (or `--delete-secret`) before DELETE of whichever secret is configured. Local cache deleted only with `--delete-local-credentials` |
-| Org secret | Out of v1 |
+| Org secret | Out of v1 / v2 |
 
 Local cache and the Actions secret are independent. Rotating one does not
 rotate the other unless the user confirms updating the cache during
 `rotate-secret`.
+
+### 11.1 OS keychain (v2)
+
+v1 plaintext `0600` file remains the fallback. v2 **prefers** the OS
+keychain for the optional local cache (not for the Actions secret).
+
+- **macOS:** Keychain Access
+- **Windows:** Credential Manager
+- **Linux:** libsecret (Secret Service). If the daemon or library is
+  missing (headless jump host, minimal container): keep the `0600` file
+  and warn. Init does **not** fail.
+- Service name: `revieweragent`. Account: `{provider}:{auth}`
+  (`claude:subscription`, `claude:api-key`, `cursor:subscription`).
+- `--no-keychain` forces the file. Default is keychain-if-available.
+- Existing v1 `credentials.json`: on first v2 init/`rotate-secret` that
+  touches the cache, offer to migrate into the keychain and delete the
+  file. `--non-interactive` leaves the file unless `--keychain` is passed.
+- CI never reads the keychain or the file. Native deps that break `npx`
+  on Linux CI jump hosts are why this waited until v2 — the cache is
+  still optional.
+
+### 11.2 `rotate-secret` (v2 command)
+
+```
+npx revieweragent rotate-secret
+```
+
+Reads `.revieweragent.yml` for `provider` + `auth`. Acquires a new
+credential the same way init does for that pair. PUT the matching Actions
+secret. Optionally update the local cache (keychain or file).
+
+- Does **not** rewrite the workflow, config `mode` / `block_severity`, or
+  branch protection.
+- Does **not** change `provider` or `auth` (that is `init`).
+- Interactive: confirm which secret name will be overwritten.
+- Non-interactive: `--yes` plus the matching `--oauth-token` /
+  `--api-key` / `--cursor-api-key`. Missing → exit 1.
+- Claude subscription: re-run `setup-token` unless `--oauth-token` is
+  already set.
 
 ---
 
@@ -1215,16 +1395,16 @@ requires `--yes`.
 
 1. Rewrite the workflow's review-action SHA and `actions/checkout` SHA from
    a mapping shipped in the package. Never switch back to `npx` on the hot
-   path.
+   path. Refresh the Claude CLI npm pin **or** the Cursor CLI tarball pin
+   to match this package — whichever the install uses. Never install both.
 2. Migrate `.revieweragent.yml` when `version < current schema` (additive
-   fields with defaults). Never silently change `mode`, `block_severity`, or
-   `auth`.
+   fields with defaults). Never silently change `mode`, `block_severity`,
+   `auth`, or `provider`.
 3. Marker rules same as init (refuse unmarked workflow).
 4. Does not rotate secrets. Does not re-apply branch protection unless
    `apply-protection` is run separately (and the workflow is already on the
    default branch).
-5. Does not change `auth` (subscription vs api-key). That is `init` /
-   `rotate-secret`.
+5. Does not change `auth` or `provider`. That is `init` / `rotate-secret`.
 
 ---
 
@@ -1236,20 +1416,20 @@ ship in v1, v2, or v3. A row appearing here does not mean it is in the first rel
 | Area | Decision |
 |---|---|
 | **v1 scope** | `init` + `review` + `uninstall`; advisory **and** gate; manual branch protection; no `merge_group`. See §0 |
-| **v2 scope** | `upgrade`, `rotate-secret`, `apply-protection`; Cursor Agent row; CODEOWNERS write; `merge_group` check reuse; OS keychain. See §0 |
+| **v2 scope** | `upgrade`, `rotate-secret`, `apply-protection`; Cursor Agent row (§3 / §8); CODEOWNERS write; `merge_group` check reuse; OS keychain (§11.1). See §0 |
 | **v3 scope** | Undesigned. Other git hosts, Copilot/OpenAI/Gemini, org-wide rollout, dashboard, multi-provider. See §18 |
 | Name | `revieweragent`, npm |
 | Platforms | GitHub v1; GitLab, Bitbucket, Azure DevOps **v3**; **platform port from day one** |
-| Provider | Registry-driven; v1 live row = Claude; v2 live Agent row = Cursor; one active provider per repo |
+| Provider | Registry-driven; v1 live row = Claude; v2 live Agent row = Cursor (`provider: cursor`, `auth: subscription` only); one active provider per repo |
 | Setup prompt | **Agent or Model?** then registry-filtered provider list |
 | Auth | Agent → `subscription`; Model → `api-key` |
-| Subscription token | `claude setup-token`, ~1 year, CI via Claude Code CLI, no tools |
-| Token acquisition | Installer spawns `setup-token` itself, captures output in memory — no manual copy-paste, no temp file (§5, §11) |
+| Subscription token | Claude: `claude setup-token`, ~1 year, CI via Claude Code CLI, no tools. Cursor: Dashboard / service-account **API key**, CI via `agent --mode ask`, empty workspace, no `--force` |
+| Token acquisition | Claude: installer spawns `setup-token`, captures output in memory. Cursor: masked paste of Dashboard key — no `agent login` scrape (§3, §11) |
 | CLI argv (subscription) | `--tools ""` (not `--allowedTools`), `--model sonnet`, `--disable-slash-commands`, `--strict-mcp-config`, `--json-schema`; Node `stdin: "ignore"`; never `--bare` — verified §8 |
 | Model pinning | Mandatory. Unpinned defaults to Opus + 75k-token discovery overhead = ~18x cost (§8) |
 | CLI result parsing | Use `structured_output`; never branch on `subtype`. `is_error` + 401/403 → fail-closed; 429/5xx → availability skip. **400 quota splits by `auth`** (§8) |
-| Local credential cache | Optional plaintext `0600`; keychain deferred (recorded tradeoff); separate from Actions secret |
-| Secret names | `REVIEWERAGENT_ANTHROPIC_API_KEY` or `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` |
+| Local credential cache | v1: optional plaintext `0600`. **v2:** OS keychain, file fallback (§11.1). Separate from Actions secret |
+| Secret names | Claude: `REVIEWERAGENT_ANTHROPIC_API_KEY` or `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`. Cursor: `REVIEWERAGENT_CURSOR_API_KEY` → job `CURSOR_API_KEY` |
 | Workflow | Marker-owned; SHA-pinned **public** `owner/repo/actions/review@sha` — **not** `npx` per event |
 | Job id vs check name | Workflow job id is `revieweragent-run`; Checks API name stays `revieweragent`. Deliberately different — corrected after live testing found GitHub blocks `GITHUB_TOKEN` from updating a check that shares its name with the running job (§7, §9) |
 | `GITHUB_TOKEN` | Review step's `env:` must set it explicitly (`${{ secrets.GITHUB_TOKEN }}`) — not auto-injected into a JS action's `process.env` — corrected after live testing (§7) |
@@ -1266,7 +1446,7 @@ ship in v1, v2, or v3. A row appearing here does not mean it is in the first rel
 | First-time contributor toggle | Not an abuse gate; do not rely on it |
 | Checkout | Base only; never PR head |
 | Diff source | GitHub API as data |
-| Model tools | None |
+| Model tools | None. Claude: `--tools ""`. Cursor: `--mode ask` + empty `--workspace`; never `--force` / `--yolo` |
 | Prompt injection | System prompt + delimiters + sanitization (incl. hidden HTML attrs + entities); structural controls primary, not the sanitizer |
 | Review placement | Native PR Review, type `COMMENT`, **inline `comments[]`** + summary |
 | Gate | Check run `revieweragent` on **head SHA**; job exit code |
@@ -1296,8 +1476,9 @@ Distinct from §0 **v2**, which is specified follow-on work. The items here
 have no design yet — reaching one means opening a fresh set of questions,
 not implementing something already decided.
 
-**v2 (specified)** → §0: `upgrade`, `rotate-secret`, `apply-protection`,
-`merge_group` reuse, CODEOWNERS writing, OS keychain, **Cursor** Agent row.
+**v2 (specified)** → §0: `upgrade`, `rotate-secret` (§11.2), `apply-protection`,
+`merge_group` reuse, CODEOWNERS writing, OS keychain (§11.1), **Cursor**
+Agent row (§3 / §8).
 
 - Light up remaining registry rows: GitHub Copilot (distinct auth path),
   OpenAI, Gemini. Still one active provider per repo until a later decision.

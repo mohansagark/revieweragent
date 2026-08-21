@@ -82,7 +82,7 @@ These are **v2** (already specified) unless noted:
 - Does not apply branch protection or merge-queue rules (`apply-protection`, `merge_group`)
 - Does not write `CODEOWNERS` (it prints a snippet you can paste)
 - Does not ship `upgrade`, `rotate-secret`, or `apply-protection`
-- Does not offer Cursor (v2) or other git hosts / Copilot / OpenAI / Gemini (v3)
+- Does not offer Cursor (v2; Dashboard API key, not Copilot) or other git hosts / Copilot / OpenAI / Gemini (v3)
 
 ## Upgrade
 

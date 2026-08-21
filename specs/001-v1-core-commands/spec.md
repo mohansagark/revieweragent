@@ -332,8 +332,9 @@ reviewed.
   and `rotate-secret` commands, automatic branch-protection application
   (`apply-protection`), `merge_group` (merge-queue) event handling, automatic
   CODEOWNERS file writing, and OS-keychain credential storage. Cursor as a
-  second Agent provider is **v2** in the product spec, not a requirement of
-  this v1 spec. `init`/`review`/`uninstall` are built so these can be added
-  without redesign, but none of them are functional requirements here.
+  second Agent provider is **v2** in the product spec (`SPEC.md` §3 / §8),
+  not a requirement of this v1 spec. `init`/`review`/`uninstall` are built so
+  these can be added without redesign, but none of them are functional
+  requirements here.
 - Multiple AI providers active simultaneously on the same repo, and
   reviewing non-GitHub-hosted repos, are both out of scope.

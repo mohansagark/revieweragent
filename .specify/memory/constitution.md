@@ -1,7 +1,7 @@
 <!--
 Sync Impact Report
-Version change: 1.0.0 → 1.1.0 (MINOR — Principle II now names v2/v3)
-Modified principles: II (v1/Later → v1 shipped, v2 specified + Cursor, v3 undesigned)
+Version change: 1.1.0 → 1.1.1 (PATCH — Principle II points at locked Cursor auth/CI)
+Modified principles: II (Cursor v2 auth/CI is specified in SPEC.md §3/§8, not a missing write-up)
 Added sections: none
 Removed sections: none
 Deferred placeholders: none
@@ -28,7 +28,9 @@ as authoritative, not aspirational, is what keeps that from repeating.
 v1 ships only `init`, `review`, and `uninstall`, per `SPEC.md` §0, and is
 done. **v2** is the specified follow-on (`upgrade`, `rotate-secret`,
 `apply-protection`, `merge_group` reuse, CODEOWNERS writing, OS keychain)
-plus lighting up **Cursor** as an Agent provider. **v3** is undesigned
+plus lighting up **Cursor** as an Agent provider — auth/CI locked in
+`SPEC.md` §3 / §8 (Dashboard API key + `agent --mode ask`, not Copilot
+GitHub-seat, not an unpinned install script). **v3** is undesigned
 work in §18 (other git hosts, Copilot/OpenAI/Gemini, org rollout, and so
 on). `/speckit-plan` and `/speckit-tasks` MUST NOT schedule v3 work inside
 a v2 plan, or v2 work disguised as a v1 patch. Branch protection stays a printed
@@ -92,9 +94,10 @@ is small next to the cost of shipping on a wrong assumption a second time.
 
 ## Security & Sanitization Requirements
 
-- One auth secret per repo (`REVIEWERAGENT_ANTHROPIC_API_KEY` or
-  `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`), never both live at once.
-  Switching auth deletes the unused secret after confirmation.
+- One auth secret per repo (`REVIEWERAGENT_ANTHROPIC_API_KEY`,
+  `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`, or v2
+  `REVIEWERAGENT_CURSOR_API_KEY`), never two live at once.
+  Switching auth or provider deletes the unused secret after confirmation.
 - Secrets are never echoed to logs; debug paths MUST mask them.
 - Workflow triggers use a single `on:` block — no `pull_request` /
   `pull_request_target` mixing (`SPEC.md` §9).
@@ -137,4 +140,4 @@ resolved by amending this document rather than left as a standing
 exception. Runtime development guidance for agents lives in `SPEC.md` and
 the `.specify/` templates, not duplicated here.
 
-**Version**: 1.1.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21
+**Version**: 1.1.1 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21

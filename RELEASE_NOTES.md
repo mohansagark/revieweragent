@@ -70,8 +70,8 @@ to talk about if this ships tomorrow.
 
 ## v2 (specified — next, not shipped)
 
-Already designed in SPEC.md. Plus **Cursor** as a second Agent provider
-(same registry shape as Claude; write the Cursor auth/CI spec before coding).
+Already designed in SPEC.md, including **Cursor** as a second Agent
+(Dashboard API key + Cursor CLI ask-mode; Claude stays the v1 default).
 
 - One-command **upgrade** of an existing install (today: re-run init)
 - **rotate-secret**

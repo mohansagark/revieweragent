@@ -1,5 +1,6 @@
 // SPEC.md §3 — registry-driven provider list. v1 live row: Claude.
-// v2 lights up Cursor (Agent, subscription-oauth). v3: Copilot / OpenAI / Gemini.
+// v2 lights up Cursor (Agent, subscription-oauth category, CURSOR_API_KEY).
+// v3: Copilot / OpenAI / Gemini.
 // Planned rows may exist as data (status: "planned") so the installer core
 // is not rewritten when they light up; they are not shown as menu items
 // until their release.
