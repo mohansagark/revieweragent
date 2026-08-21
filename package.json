@@ -1,6 +1,6 @@
 {
   "name": "revieweragent",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Wire automatic AI pull-request review into a git repo.",
   "type": "module",
   "bin": {
@@ -10,8 +10,17 @@
     "dist",
     "actions/review/action.yml",
     "actions/review/dist",
-    "pinned-shas.json"
+    "pinned-shas.json",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/mohansagark/revieweragent",
+  "bugs": {
+    "url": "https://github.com/mohansagark/revieweragent/issues"
+  },
   "engines": {
     "node": ">=20"
   },
@@ -19,6 +28,7 @@
     "build:cli": "tsc -p tsconfig.json",
     "build:action": "node esbuild.action.mjs",
     "build": "npm run build:cli && npm run build:action",
+    "prepublishOnly": "npm run build:cli",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
