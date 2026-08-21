@@ -1,0 +1,55 @@
+# Managed by revieweragent (npmjs.com/package/revieweragent)
+# Managed file — local edits are overwritten by init/upgrade.
+# Safe to delete; re-running init recreates it. Uninstall removes it.
+
+# run-name carries the PR head SHA so the per-actor fork cap can find the
+# revieweragent check when GitHub's Actions API leaves pull_requests empty
+# (cross-repo / forked PRs). github.sha is the fallback for issue_comment.
+run-name: revieweragent ${{ github.event.pull_request.head.sha || github.sha }}
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: revieweragent-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  revieweragent-run:
+    name: revieweragent-run
+    # Drafts never run at all: GitHub natively blocks merging a draft PR
+    # regardless of check status, so skipping here is safe (unlike the
+    # other no-op cases, which stay code-side — see review-skip-rules.ts).
+    # issue_comment noise (comments on issues, not PRs) is dropped the
+    # same way — SPEC.md §9: "Job-level if: is allowed only to drop
+    # obvious non-PR issue_comment noise."
+    if: |-
+      (github.event_name != 'pull_request_target' || github.event.pull_request.draft == false) &&
+      (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ~/.npm
+          key: revieweragent-claude-code-2.1.235
+      - id: install-claude
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code@2.1.235
+      - uses: mohansagark/revieweragent/actions/review@b72f4ff2aa4c6f0bc66b3251091dba572ed5f061
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}
+          REVIEWERAGENT_CLI_INSTALL_FAILED: ${{ steps.install-claude.outcome == 'failure' }}

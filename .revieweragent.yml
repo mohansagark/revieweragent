@@ -1,0 +1,25 @@
+# Managed by revieweragent — schema version below is required.
+version: 1
+provider: claude
+auth: subscription
+mode: gate
+block_severity: medium
+max_diff_lines: 4000
+max_prompt_tokens: 80000
+on_limit: skip
+max_fork_reviews_per_actor_per_hour: 5
+fork_policy: auto
+trigger_phrase: /review
+exclude:
+  - "**/package-lock.json"
+  - "**/yarn.lock"
+  - "**/pnpm-lock.yaml"
+  - "**/bun.lockb"
+  - "**/go.sum"
+  - "**/Cargo.lock"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/coverage/**"
+  - "**/*.min.js"
+  - "**/*.min.css"
+  - "**/*.{png,jpg,jpeg,gif,webp,ico,pdf,zip,gz,tgz,wasm,bin}"
