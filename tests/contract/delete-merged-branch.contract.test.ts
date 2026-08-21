@@ -20,4 +20,9 @@ describe("delete-merged-branch workflow", () => {
   it("uses contents: write so GITHUB_TOKEN can delete the ref", () => {
     expect(doc.permissions.contents).toBe("write");
   });
+
+  it("runs the tested delete script, not inline gh-api grep", () => {
+    const step = job.steps.find((s: { run?: string }) => s.run?.includes("delete-merged-head-ref.sh"));
+    expect(step).toBeDefined();
+  });
 });
