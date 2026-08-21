@@ -1,7 +1,9 @@
 <!--
 Sync Impact Report
-Version change: 1.1.0 → 1.1.1 (PATCH — Principle II points at locked Cursor auth/CI)
-Modified principles: II (Cursor v2 auth/CI is specified in SPEC.md §3/§8, not a missing write-up)
+Version change: 1.1.0 → 1.1.1 (PATCH — Principle II: Cursor auth/CI + v2
+merge_group mapping; GHE Server is not a v1/v2 target)
+Modified principles: II (Cursor v2 auth/CI locked in SPEC.md §3/§8;
+merge_group reuse uses head_ref mapping, not SHA equality; GHE Server out)
 Added sections: none
 Removed sections: none
 Deferred placeholders: none
@@ -27,14 +29,16 @@ as authoritative, not aspirational, is what keeps that from repeating.
 ### II. Release-scope discipline (NON-NEGOTIABLE)
 v1 ships only `init`, `review`, and `uninstall`, per `SPEC.md` §0, and is
 done. **v2** is the specified follow-on (`upgrade`, `rotate-secret`,
-`apply-protection`, `merge_group` reuse, CODEOWNERS writing, OS keychain)
-plus lighting up **Cursor** as an Agent provider — auth/CI locked in
-`SPEC.md` §3 / §8 (Dashboard API key + `agent --mode ask`, not Copilot
-GitHub-seat, not an unpinned install script). **v3** is undesigned
-work in §18 (other git hosts, Copilot/OpenAI/Gemini, org rollout, and so
-on). `/speckit-plan` and `/speckit-tasks` MUST NOT schedule v3 work inside
-a v2 plan, or v2 work disguised as a v1 patch. Branch protection stays a printed
-instruction in v1; auto-apply is v2 (`apply-protection`).
+`apply-protection`, `merge_group` reuse with the locked `head_ref` mapping,
+CODEOWNERS writing, OS keychain) plus lighting up **Cursor** as an Agent
+provider — auth/CI locked in `SPEC.md` §3 / §8 (Dashboard API key +
+`agent --mode ask`, not Copilot GitHub-seat, not an unpinned install
+script). **v3** is undesigned work in §18 (other git hosts,
+Copilot/OpenAI/Gemini, org rollout, and so on). `/speckit-plan` and
+`/speckit-tasks` MUST NOT schedule v3 work inside a v2 plan, or v2 work
+disguised as a v1 patch. Branch protection stays a printed instruction in
+v1; auto-apply is v2 (`apply-protection`). GitHub.com / GHE Cloud only;
+GHE Server is not a v1/v2 target.
 
 **Rationale**: `SPEC.md` §0 slices the product down to the smallest thing
 that answers "are the reviews any good?" — every command beyond that is

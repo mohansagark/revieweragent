@@ -16,8 +16,8 @@ export interface PinnedShas {
   reviewActionSha: string;
   actionOwner: string;
   actionRepo: string;
-  // actions/cache pin for the CLI-install cache (SPEC.md §7 follow-up:
-  // avoids a fresh npm fetch on every PR for auth: subscription installs).
+  // actions/cache pin for the CLI-install cache (SPEC.md §7, shipped
+  // 1.1.0): avoids a fresh npm fetch on every PR for auth: subscription.
   cacheSha: string;
 }
 

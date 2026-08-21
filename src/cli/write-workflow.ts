@@ -100,9 +100,9 @@ function claudeCliInstallStep(auth: AuthType, shas: PinnedShas): string {
   // continue-on-error: SPEC.md §7/§9 — npm install failure is an
   // availability skip, not fail-closed. The review step reads
   // REVIEWERAGENT_CLI_INSTALL_FAILED and classifies ENOENT accordingly.
-  // actions/cache (follow-up work noted in SPEC.md §7): avoids a fresh
-  // npm fetch on every PR — cache key is pinned to the exact CLI version,
-  // so a version bump naturally invalidates it rather than serving stale.
+  // actions/cache (SPEC.md §7, shipped 1.1.0): avoids a fresh npm fetch
+  // on every PR — cache key is pinned to the exact CLI version, so a
+  // version bump naturally invalidates it rather than serving stale.
   return `      - uses: actions/cache@${shas.cacheSha}
         with:
           path: ~/.npm

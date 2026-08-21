@@ -19,22 +19,27 @@ uses: <this-repo-owner>/<this-repo-name>/actions/review@<commit-sha>
 permissions: {}
 
 jobs:
-  revieweragent:
-    name: revieweragent          # locked — Checks API name; required-check config depends on this exact string
+  revieweragent-run:
+    name: revieweragent-run      # job id/name; NOT the required check (SPEC §7)
     permissions:
       contents: read
       pull-requests: write
       checks: write
       actions: read
+      issues: write              # timeline start/complete comments (v1.1.0)
     steps:
       - uses: actions/checkout@<sha>     # base ref only, no ref: override, persist-credentials: false
       - uses: <owner>/<repo>/actions/review@<sha>
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # exactly one of:
           ANTHROPIC_API_KEY: ${{ secrets.REVIEWERAGENT_ANTHROPIC_API_KEY }}
           # or
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+The required GitHub Check name is **`revieweragent`** (Checks API), not the
+job id. `run-name: revieweragent <pr-head-sha>` is required for the fork cap.
 
 ## Inputs (via job env, not `with:`)
 
