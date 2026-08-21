@@ -11,6 +11,9 @@ npx revieweragent init
 v1 supports **Claude subscription** (Claude Code OAuth token from `claude setup-token`)
 and **Anthropic API key**. Subscription is the default.
 
+Marketing copy for a future public launch lives in [`RELEASE_NOTES.md`](./RELEASE_NOTES.md).
+That file is a living list, not a promise that we have launched.
+
 ## Requirements
 
 - Node.js 20+
