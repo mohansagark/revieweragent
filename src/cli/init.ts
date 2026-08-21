@@ -14,7 +14,15 @@ import {
   BLOCK_SEVERITY_VALUES,
 } from "../core/config-schema.js";
 import { readCachedCredential, writeCachedCredential } from "../core/credential-cache.js";
-import { requiredDependenciesFor, runFixCommand, runGhAuthLogin, checkGitRepo } from "./dependency-checks.js";
+import {
+  requiredDependenciesFor,
+  runFixCommand,
+  runGhAuthLogin,
+  checkGitRepo,
+  checkGhCli,
+  checkGhAuthenticated,
+  shouldPromptGhLogin,
+} from "./dependency-checks.js";
 import { runSetupToken } from "../provider/claude/setup-token.js";
 import { validateApiKey } from "../provider/claude/api-key-credential.js";
 import { claudeProvider } from "../provider/claude/registry-entry.js";
@@ -146,9 +154,13 @@ async function promptForInitOptions(): Promise<InitOptions> {
     }
   }
 
-  const ghAuthed = requiredDependenciesFor(auth).find((d) => d.name === "gh CLI")?.present;
-  if (ghAuthed) {
-    const loginNeeded = await p.confirm({ message: "Log in to gh CLI now?", initialValue: false });
+  if (
+    shouldPromptGhLogin({
+      ghCliPresent: checkGhCli().present,
+      ghAuthenticated: checkGhAuthenticated().present,
+    })
+  ) {
+    const loginNeeded = await p.confirm({ message: "Log in to gh CLI now?", initialValue: true });
     if (!p.isCancel(loginNeeded) && loginNeeded) runGhAuthLogin();
   }
 

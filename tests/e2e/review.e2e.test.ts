@@ -38,6 +38,7 @@ vi.mock("../../src/provider/claude/api-key.js", async (importOriginal) => {
 });
 
 import { runReview } from "../../src/cli/review.js";
+import { formatReviewCompleteComment, formatReviewStartComment } from "../../src/cli/review-progress.js";
 
 const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PASS_JSON = JSON.stringify({ summary: "Looks good", findings: [] });
@@ -130,8 +131,23 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(1);
     expect(github.calls.createCheck).toHaveLength(1);
+    expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
+      formatReviewStartComment(),
+      formatReviewCompleteComment("PASS", "Looks good"),
+    ]);
+    expect((github.calls.createReview[0] as { body: string }).body).toContain("**Verdict: PASS**");
     expect(github.checks[0]?.conclusion).toBe("success");
     expect(github.checks[0]?.headSha).toBe(HEAD);
+  });
+
+  it("updates existing start/complete comments instead of stacking new ones", async () => {
+    const github = await setup({ config: { mode: "advisory", auth: "subscription" } });
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-test-token-not-real";
+    await expect(runReview()).resolves.toBe(0);
+    await expect(runReview()).resolves.toBe(0);
+    expect(github.calls.createComment).toHaveLength(2);
+    expect(github.calls.updateComment).toHaveLength(2);
+    expect(github.issueComments).toHaveLength(2);
   });
 
   it("gate mode BLOCKs on a high finding and exits 1", async () => {
@@ -140,6 +156,10 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     githubState.subscription.mockResolvedValue(BLOCK_JSON);
     await expect(runReview()).resolves.toBe(1);
     expect(github.checks[0]?.conclusion).toBe("failure");
+    expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
+      formatReviewStartComment(),
+      formatReviewCompleteComment("BLOCK", "SQL injection"),
+    ]);
     const review = github.calls.createReview[0] as { comments?: unknown[] };
     expect(review.comments?.length).toBeGreaterThan(0);
   });
@@ -176,6 +196,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createCheck).toHaveLength(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("no-ops comment-gated fork PRs", async () => {
@@ -185,6 +206,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     });
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("enforces the per-actor fork cap and no-ops when exceeded", async () => {
@@ -197,6 +219,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     github.checks.push({ id: 9, name: "revieweragent", headSha: HEAD, conclusion: "success" });
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("reviews a fork PR under the cap", async () => {
@@ -230,6 +253,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     });
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("runs on a write-access /review comment", async () => {
@@ -335,6 +359,11 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     await expect(runReview()).rejects.toThrow(/Validation Failed/);
     expect(github.checks[0]?.conclusion).toBe("failure");
     expect(github.checks[0]?.headSha).toBe(HEAD);
+    expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
+      formatReviewStartComment(),
+      formatReviewCompleteComment("fail-closed-infra"),
+    ]);
+    expect((github.calls.createComment[1] as { body: string }).body).not.toMatch(/Validation Failed/);
   });
 
   it("uses the api-key backend when config.auth is api-key", async () => {

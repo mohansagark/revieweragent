@@ -51,6 +51,10 @@ export function checkGhAuthenticated(): DependencyStatus {
   return { name: "gh authentication", present: result.status === 0 };
 }
 
+export function shouldPromptGhLogin(opts: { ghCliPresent: boolean; ghAuthenticated: boolean }): boolean {
+  return opts.ghCliPresent && !opts.ghAuthenticated;
+}
+
 /** SPEC.md §6: a real identity step, run via its own browser/device-code flow. */
 export function runGhAuthLogin(): void {
   execFileSync("gh", ["auth", "login"], { stdio: "inherit" });

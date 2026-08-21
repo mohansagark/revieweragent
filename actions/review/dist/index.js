@@ -11134,6 +11134,44 @@ function createGitHubCheckPort(octokit, owner, repo) {
   };
 }
 
+// src/platform/github/comments.ts
+var WORKFLOW_COMMENT_ACTOR = "github-actions[bot]";
+function createGitHubCommentPort(octokit, owner, repo) {
+  return {
+    async upsertComment(pr, marker, body) {
+      let existingId;
+      for await (const response of octokit.paginate.iterator(octokit.issues.listComments, {
+        owner,
+        repo,
+        issue_number: pr,
+        per_page: 100
+      })) {
+        const page = response.data;
+        const match2 = page.find(
+          (comment) => comment.user?.login === WORKFLOW_COMMENT_ACTOR && (comment.body ?? "").includes(marker)
+        );
+        if (match2) {
+          existingId = match2.id;
+          break;
+        }
+      }
+      if (existingId !== void 0) {
+        await octokit.issues.updateComment({ owner, repo, comment_id: existingId, body });
+        return;
+      }
+      await octokit.issues.createComment({ owner, repo, issue_number: pr, body });
+    }
+  };
+}
+async function postProgressComment(port, pr, marker, body) {
+  try {
+    await port.upsertComment(pr, marker, body);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`revieweragent: progress comment failed: ${message}`);
+  }
+}
+
 // src/platform/github/actor-rate-limit.ts
 var WORKFLOW_FILE = "revieweragent.yml";
 var RUN_NAME_PREFIX = "revieweragent ";
@@ -13590,6 +13628,62 @@ async function publishCheckAndReview(opts) {
   return outcome.exitCode;
 }
 
+// src/cli/review-progress.ts
+var REVIEW_START_COMMENT = "\u{1F50D} **Review starting**";
+var REVIEW_START_MARKER = "revieweragent-progress:start";
+var REVIEW_COMPLETE_MARKER = "revieweragent-progress:complete";
+var VERDICT_EMOJI = {
+  PASS: "\u2705",
+  BLOCK: "\u26A0\uFE0F",
+  SKIPPED: "\u2139\uFE0F",
+  FAILED: "\u274C"
+};
+function verdictFor(kind) {
+  switch (kind) {
+    case "PASS":
+      return "PASS";
+    case "BLOCK":
+      return "BLOCK";
+    case "availability-skip":
+      return "SKIPPED";
+    case "fail-closed-infra":
+      return "FAILED";
+  }
+}
+function summaryWithVerdict(kind, summary) {
+  return `**Verdict: ${verdictFor(kind)}**
+
+${summary}`;
+}
+function publicProgressDetails(kind, summary) {
+  if (kind === "PASS" || kind === "BLOCK") {
+    return summary?.trim() || "";
+  }
+  if (kind === "availability-skip") {
+    return "Review skipped (limit or availability).";
+  }
+  return "Review could not complete. See the revieweragent check for details.";
+}
+function formatReviewStartComment() {
+  return `${REVIEW_START_COMMENT}
+
+${REVIEW_START_MARKER}`;
+}
+function formatReviewCompleteComment(kind, summary) {
+  const verdict = verdictFor(kind);
+  const details = publicProgressDetails(kind, summary);
+  const lines = [
+    `${VERDICT_EMOJI[verdict]} **Review completed**`,
+    "",
+    `**Verdict: ${verdict}**`
+  ];
+  if (details) {
+    lines.push("", details);
+  }
+  lines.push("", REVIEW_COMPLETE_MARKER);
+  return lines.join("\n");
+}
+
 // src/provider/claude/subscription.ts
 import { spawn } from "node:child_process";
 var ModelBackendError = class extends Error {
@@ -13779,6 +13873,7 @@ async function runReview() {
   const octokit = createGitHubClient(token);
   const checks = createGitHubCheckPort(octokit, owner, repo);
   const reviews = createGitHubReviewPort(octokit, owner, repo);
+  const comments = createGitHubCommentPort(octokit, owner, repo);
   let ctx;
   try {
     ctx = await resolveEventContext(octokit, owner, repo);
@@ -13789,7 +13884,7 @@ async function runReview() {
     }
     throw err;
   }
-  const publish = (kind, mode, summary, comments) => publishCheckAndReview({
+  const publish = (kind, mode, summary, reviewComments) => publishCheckAndReview({
     checks,
     reviews,
     prNumber: ctx.prNumber,
@@ -13797,18 +13892,39 @@ async function runReview() {
     kind,
     mode,
     summary,
-    comments
+    comments: reviewComments
   });
+  const publishWithProgress = async (kind, mode, summary, reviewComments) => {
+    await postProgressComment(comments, ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
+    try {
+      const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
+      await postProgressComment(
+        comments,
+        ctx.prNumber,
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment(kind, summary)
+      );
+      return code;
+    } catch (err) {
+      await postProgressComment(
+        comments,
+        ctx.prNumber,
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment("fail-closed-infra")
+      );
+      throw err;
+    }
+  };
   if (!existsSync(CONFIG_PATH)) {
     console.error(`${CONFIG_PATH} not found on the base branch.`);
-    return await publish("fail-closed-infra", "gate", `${CONFIG_PATH} not found on the base branch.`);
+    return await publishWithProgress("fail-closed-infra", "gate", `${CONFIG_PATH} not found on the base branch.`);
   }
   let config;
   try {
     config = parseConfig(readFileSync2(CONFIG_PATH, "utf8"));
   } catch (err) {
     if (err instanceof InvalidConfigYamlError || err instanceof UnrecognizedConfigVersionError || err instanceof InvalidConfigError) {
-      return await publish("fail-closed-infra", "gate", err.message);
+      return await publishWithProgress("fail-closed-infra", "gate", err.message);
     }
     throw err;
   }
@@ -13836,10 +13952,10 @@ async function runReview() {
   const { overLimit } = checkLimits(config, files);
   const limitOutcome = decideLimitOutcome(config, overLimit);
   if (limitOutcome.kind === "gate-block" || limitOutcome.kind === "advisory-block") {
-    return await publish("fail-closed-infra", config.mode, "Diff too large \u2014 skipped review.");
+    return await publishWithProgress("fail-closed-infra", config.mode, "Diff too large \u2014 skipped review.");
   }
   if (limitOutcome.kind === "advisory-skip") {
-    return await publish("availability-skip", config.mode, "Diff too large \u2014 skipped review.");
+    return await publishWithProgress("availability-skip", config.mode, "Diff too large \u2014 skipped review.");
   }
   const systemPrompt = buildInstructionsPreamble(instructions);
   const userPayload = wrapUntrustedData({
@@ -13848,7 +13964,7 @@ async function runReview() {
     diff: formatFilePatches(included)
   });
   if (config.auth === "subscription" && process.env.ANTHROPIC_API_KEY) {
-    return await publish(
+    return await publishWithProgress(
       "fail-closed-infra",
       config.mode,
       "ANTHROPIC_API_KEY is set alongside auth: subscription \u2014 refusing to mix credentials."
@@ -13860,7 +13976,7 @@ async function runReview() {
   } catch (err) {
     if (err instanceof ModelBackendError) {
       const errClass = classifyError(err.classifiable);
-      return await publish(
+      return await publishWithProgress(
         errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
         config.mode,
         err.message
@@ -13873,7 +13989,7 @@ async function runReview() {
     findings = parseFindings(rawOutput);
   } catch (err) {
     if (err instanceof InvalidFindingsError) {
-      return await publish("fail-closed-infra", config.mode, err.message);
+      return await publishWithProgress("fail-closed-infra", config.mode, err.message);
     }
     throw err;
   }
@@ -13882,7 +13998,7 @@ async function runReview() {
     included,
     findings.findings.filter((f) => f.line !== null).map((f) => ({ path: f.file, line: f.line, severity: f.severity, message: f.message }))
   );
-  return await publish(gateResult, config.mode, findings.summary, inlineComments);
+  return await publishWithProgress(gateResult, config.mode, findings.summary, inlineComments);
 }
 
 // src/action-entry.ts

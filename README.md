@@ -36,6 +36,8 @@ That writes:
 
 Then commit and push those files. Later PRs get a review automatically.
 
+`npx revieweragent` with no subcommand is the same as `npx revieweragent init`. You only run that **once per repo**. After the workflow is on the default branch, opening a PR is enough — do not re-run init for every review.
+
 ### Auth
 
 `init` tries subscription first (`claude setup-token` output). Pass `--auth api-key`

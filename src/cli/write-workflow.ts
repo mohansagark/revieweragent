@@ -81,6 +81,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      issues: write
       checks: write
       actions: read
     steps:
