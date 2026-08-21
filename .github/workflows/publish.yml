@@ -17,11 +17,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1+. Do not rely on whatever Node 24
+      # ships on the runner image that day.
+      - run: npm install -g npm@11.6.2
       - run: npm ci
       - run: npm run build:cli
       # NPM_TOKEN if present; otherwise npm Trusted Publishing (OIDC).
+      # setup-node's registry-url writes `_authToken=${NODE_AUTH_TOKEN}` even
+      # when the secret is empty; npm then skips OIDC and PUTs with blank
+      # credentials, which the registry reports as E404.
       - name: Publish to npm
         run: |
           if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
@@ -29,6 +35,10 @@ jobs:
           else
             echo "Publishing with OIDC trusted publisher"
             unset NODE_AUTH_TOKEN
+            npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+            if [ -f "$npmrc" ]; then
+              sed -i '/^\/\/registry\.npmjs\.org\/:_authToken=/d' "$npmrc"
+            fi
           fi
           npm publish --access public --provenance
         env:
