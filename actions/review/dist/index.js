@@ -13630,8 +13630,8 @@ async function publishCheckAndReview(opts) {
 
 // src/cli/review-progress.ts
 var REVIEW_START_COMMENT = "\u{1F50D} **Review starting**";
-var REVIEW_START_MARKER = "<!-- revieweragent-progress:start -->";
-var REVIEW_COMPLETE_MARKER = "<!-- revieweragent-progress:complete -->";
+var REVIEW_START_MARKER = "revieweragent-progress:start";
+var REVIEW_COMPLETE_MARKER = "revieweragent-progress:complete";
 var VERDICT_EMOJI = {
   PASS: "\u2705",
   BLOCK: "\u26A0\uFE0F",

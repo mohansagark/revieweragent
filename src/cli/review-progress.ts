@@ -1,8 +1,11 @@
 import type { CheckOutcomeKind } from "../core/error-classifier.js";
 
 export const REVIEW_START_COMMENT = "🔍 **Review starting**";
-export const REVIEW_START_MARKER = "<!-- revieweragent-progress:start -->";
-export const REVIEW_COMPLETE_MARKER = "<!-- revieweragent-progress:complete -->";
+// Not HTML comments: the review sanitizer strips `<!-- ... -->` from diffs,
+// which made HTML-comment markers look empty to the model and would make
+// upsert match every bot comment (`"".includes("")` is true).
+export const REVIEW_START_MARKER = "revieweragent-progress:start";
+export const REVIEW_COMPLETE_MARKER = "revieweragent-progress:complete";
 
 export type ReviewVerdict = "PASS" | "BLOCK" | "SKIPPED" | "FAILED";
 

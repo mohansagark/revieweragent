@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { sanitize } from "../../src/core/sanitizer.js";
 import {
   REVIEW_START_COMMENT,
+  REVIEW_START_MARKER,
   REVIEW_COMPLETE_MARKER,
   formatReviewCompleteComment,
   formatReviewStartComment,
@@ -10,6 +12,15 @@ import {
 } from "../../src/cli/review-progress.js";
 
 describe("review progress comments", () => {
+  it("uses distinct non-empty markers that survive HTML-comment sanitization", () => {
+    expect(REVIEW_START_MARKER.length).toBeGreaterThan(0);
+    expect(REVIEW_COMPLETE_MARKER.length).toBeGreaterThan(0);
+    expect(REVIEW_START_MARKER).not.toBe(REVIEW_COMPLETE_MARKER);
+    expect(sanitize(REVIEW_START_MARKER)).toBe(REVIEW_START_MARKER);
+    expect(sanitize(REVIEW_COMPLETE_MARKER)).toBe(REVIEW_COMPLETE_MARKER);
+    expect("".includes(REVIEW_START_MARKER)).toBe(false);
+  });
+
   it("uses a visible start marker", () => {
     expect(formatReviewStartComment()).toContain(REVIEW_START_COMMENT);
     expect(formatReviewStartComment()).toContain("🔍");

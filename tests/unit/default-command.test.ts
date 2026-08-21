@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { argvWithDefaultInitCommand } from "../../src/cli/default-command.js";
+import { readFileSync } from "node:fs";
+import { argvWithDefaultInitCommand, SUBCOMMANDS } from "../../src/cli/default-command.js";
 
 describe("argvWithDefaultInitCommand", () => {
   it("defaults a bare invocation to init", () => {
@@ -20,9 +21,16 @@ describe("argvWithDefaultInitCommand", () => {
     expect(argvWithDefaultInitCommand(["--mode", "help"])).toEqual(["init", "--mode", "help"]);
   });
 
-  it("does not rewrite --help or --version", () => {
+  it("does not rewrite --help, --version, or the help subcommand", () => {
     expect(argvWithDefaultInitCommand(["--help"])).toEqual(["--help"]);
     expect(argvWithDefaultInitCommand(["-h"])).toEqual(["-h"]);
     expect(argvWithDefaultInitCommand(["--version"])).toEqual(["--version"]);
+    expect(argvWithDefaultInitCommand(["help"])).toEqual(["help"]);
+  });
+
+  it("lists every commander subcommand registered in index.ts", () => {
+    const src = readFileSync("src/cli/index.ts", "utf8");
+    const registered = [...src.matchAll(/\.command\("([^"]+)"\)/g)].map((match) => match[1]);
+    expect([...registered].sort()).toEqual([...SUBCOMMANDS].sort());
   });
 });
