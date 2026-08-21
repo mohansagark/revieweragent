@@ -2,13 +2,12 @@
 
 Living notes for a **public launch**, not a developer changelog.
 
-npm already has a technical v1 (`revieweragent@1.1.0`). This file tracks what is
+npm already has a technical v2 (`revieweragent@1.2.0`). This file tracks what is
 worth saying out loud. Keep appending shipped headlines here. When the list is
 strong enough to launch, flip **Launch status** and cut a public post from this
 page — do not invent copy at the last minute.
 
-**Launch status:** not ready. Technical v1 is live; v2 is specified and
-implemented in-tree. Marketing v1 is not.
+**Launch status:** not ready. Technical v2 is live on npm. Marketing v1 is not.
 
 **How to update:** add a dated bullet under **Shipped** when a user-visible
 capability lands. Do not log pins, SHA bumps, or CI-only fixes.
@@ -24,7 +23,7 @@ against the diff as **data** — it never checks out or executes the PR branch, 
 it works on any language.
 
 Default path is a **Claude subscription** (`claude setup-token`), not a console
-API key.
+API key. Cursor is an opt-in second Agent.
 
 Install:
 
@@ -32,15 +31,21 @@ Install:
 npx revieweragent init
 ```
 
+Already installed from 1.1.0?
+
+```bash
+npx revieweragent upgrade
+```
+
 ---
 
 ## Who it is for
 
-Repo maintainers who already pay for Claude Code and want that same reviewer on
-every PR, without standing up another bot or sharing a team API key.
+Repo maintainers who already pay for Claude Code or Cursor and want that same
+reviewer on every PR, without standing up another bot or sharing a team API key.
 
-Not yet: GitLab / Bitbucket / Azure DevOps (**v3**). Cursor is a second Agent
-in v2. `apply-protection` is the opt-in for requiring the `revieweragent` check.
+Not yet: GitLab / Bitbucket / Azure DevOps (**v3**). `apply-protection` is the
+opt-in for requiring the `revieweragent` check on classic branch protection.
 
 ---
 
@@ -48,11 +53,22 @@ in v2. `apply-protection` is the opt-in for requiring the `revieweragent` check.
 
 ### 2026-08-21 — technical v2 (`npx revieweragent@1.2.0`)
 
-- **`upgrade`**, **`rotate-secret`**, and **`apply-protection`**.
-- **Cursor** as a second Agent (Dashboard / service-account API key, ask-mode CLI).
-- Merge-queue (`merge_group`) reuses a prior PASS when the mapping still holds.
-- Managed **CODEOWNERS** block on init; uninstall removes only that block.
-- OS keychain for the optional local credential cache, with the `0600` file as fallback.
+- **Cursor as a second Agent.** Dashboard or service-account API key, ask-mode
+  CLI in CI. Not Copilot, and not a console API-key path. Claude subscription
+  stays the default.
+- **`upgrade`.** Refresh the pinned Action without changing provider, auth, or
+  mode. Re-run init only when you actually want to switch those.
+- **`rotate-secret`.** Put a new credential in the matching GitHub Actions
+  secret (the Claude token lasts about a year).
+- **`apply-protection`.** Opt-in: add the `revieweragent` required check on
+  classic branch protection, then verify it stuck. Will not invent a ruleset
+  from scratch — it prints the settings link instead.
+- **Merge queue.** Reuses a prior PASS when the mapping still holds; otherwise
+  one extra review on the merge commit.
+- **CODEOWNERS.** Init can write a managed block (`--codeowners @USER`);
+  uninstall removes only that block.
+- **OS keychain.** Local credential cache prefers macOS Keychain / libsecret,
+  and falls back to a `0600` file.
 
 ### 2026-08-21 — technical v1.1.0 (`npx revieweragent@1.1.0`)
 
@@ -63,16 +79,16 @@ in v2. `apply-protection` is the opt-in for requiring the `revieweragent` check.
   failures, without dumping raw errors on the PR.
 - **Claude subscription by default**, Anthropic API key as an opt-in.
 - **Advisory or gate.** Gate fails the GitHub Check named `revieweragent` at a
-  chosen severity. You wire that check into branch protection; the installer
-  does not flip repo rules for you.
+  chosen severity. You wire that check into branch protection; 1.1.0 did not
+  flip repo rules for you (`apply-protection` is 1.2.0).
 - **Forks.** Default `auto`: review fork PRs with a per-actor hourly cap.
 - **Uninstall** removes the workflow, config, and the secret this tool created.
 - **Any language.** The job never builds or runs the PR.
 
 ### 2026-08-21 — technical v1.0.0
 
-First public npm package: install, automatic review, uninstall. 1.1.0 is what
-to talk about if this ships tomorrow.
+First public npm package: install, automatic review, uninstall. **1.2.0** is
+what to talk about if this ships tomorrow.
 
 ---
 
@@ -89,9 +105,9 @@ to talk about if this ships tomorrow.
 ## Do not lead with
 
 - SHA pins, workflow job ids, trusted publishing, sanitizer internals
-- “We have 171 tests”
-- Features that are still “re-run init” for provider switches, or “flip this in
-  GitHub settings” when classic protection does not exist
+- “We have 235 tests”
+- Provider switches that still need a re-run of `init`
+- Inventing a branch-protection ruleset when classic protection does not exist
 
 ---
 
