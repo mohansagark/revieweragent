@@ -50,7 +50,7 @@ jobs:
       - id: install-claude
         continue-on-error: true
         run: npm install -g @anthropic-ai/claude-code@2.1.235
-      - uses: mohansagark/revieweragent/actions/review@f7bdeae9775a434c665e7660990b318ea5a1f067
+      - uses: mohansagark/revieweragent/actions/review@5880e4002083c5539903c010d47e10905d5c45b8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}
