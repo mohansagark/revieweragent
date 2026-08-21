@@ -20,7 +20,7 @@ import { evaluateGate } from "../core/gate-evaluator.js";
 import { classifyError } from "../core/error-classifier.js";
 import { commentsInDiff, formatFilePatches } from "../core/review-payload.js";
 import { publishCheckAndReview } from "./review-outcome.js";
-import { REVIEW_START_COMMENT, formatReviewCompleteComment, summaryWithVerdict } from "./review-progress.js";
+import { REVIEW_START_MARKER, REVIEW_COMPLETE_MARKER, formatReviewStartComment, formatReviewCompleteComment, summaryWithVerdict } from "./review-progress.js";
 import { callSubscriptionBackend, ModelBackendError } from "../provider/claude/subscription.js";
 import { callApiKeyBackend } from "../provider/claude/api-key.js";
 
@@ -88,17 +88,22 @@ export async function runReview(): Promise<number> {
     summary: string,
     reviewComments?: Parameters<typeof publishCheckAndReview>[0]["comments"],
   ): Promise<number> => {
-    await postProgressComment(comments, ctx.prNumber, REVIEW_START_COMMENT);
+    await postProgressComment(comments, ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
     try {
       const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
-      await postProgressComment(comments, ctx.prNumber, formatReviewCompleteComment(kind, summary));
-      return code;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       await postProgressComment(
         comments,
         ctx.prNumber,
-        formatReviewCompleteComment("fail-closed-infra", message),
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment(kind, summary),
+      );
+      return code;
+    } catch (err) {
+      await postProgressComment(
+        comments,
+        ctx.prNumber,
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment("fail-closed-infra"),
       );
       throw err;
     }

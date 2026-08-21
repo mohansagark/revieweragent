@@ -11135,21 +11135,37 @@ function createGitHubCheckPort(octokit, owner, repo) {
 }
 
 // src/platform/github/comments.ts
+var WORKFLOW_COMMENT_ACTOR = "github-actions[bot]";
 function createGitHubCommentPort(octokit, owner, repo) {
   return {
-    async postComment(pr, body) {
-      await octokit.issues.createComment({
+    async upsertComment(pr, marker, body) {
+      let existingId;
+      for await (const response of octokit.paginate.iterator(octokit.issues.listComments, {
         owner,
         repo,
         issue_number: pr,
-        body
-      });
+        per_page: 100
+      })) {
+        const page = response.data;
+        const match2 = page.find(
+          (comment) => comment.user?.login === WORKFLOW_COMMENT_ACTOR && (comment.body ?? "").includes(marker)
+        );
+        if (match2) {
+          existingId = match2.id;
+          break;
+        }
+      }
+      if (existingId !== void 0) {
+        await octokit.issues.updateComment({ owner, repo, comment_id: existingId, body });
+        return;
+      }
+      await octokit.issues.createComment({ owner, repo, issue_number: pr, body });
     }
   };
 }
-async function postProgressComment(port, pr, body) {
+async function postProgressComment(port, pr, marker, body) {
   try {
-    await port.postComment(pr, body);
+    await port.upsertComment(pr, marker, body);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`revieweragent: progress comment failed: ${message}`);
@@ -13614,6 +13630,8 @@ async function publishCheckAndReview(opts) {
 
 // src/cli/review-progress.ts
 var REVIEW_START_COMMENT = "\u{1F50D} **Review starting**";
+var REVIEW_START_MARKER = "<!-- revieweragent-progress:start -->";
+var REVIEW_COMPLETE_MARKER = "<!-- revieweragent-progress:complete -->";
 var VERDICT_EMOJI = {
   PASS: "\u2705",
   BLOCK: "\u26A0\uFE0F",
@@ -13637,16 +13655,32 @@ function summaryWithVerdict(kind, summary) {
 
 ${summary}`;
 }
+function publicProgressDetails(kind, summary) {
+  if (kind === "PASS" || kind === "BLOCK") {
+    return summary?.trim() || "";
+  }
+  if (kind === "availability-skip") {
+    return "Review skipped (limit or availability).";
+  }
+  return "Review could not complete. See the revieweragent check for details.";
+}
+function formatReviewStartComment() {
+  return `${REVIEW_START_COMMENT}
+
+${REVIEW_START_MARKER}`;
+}
 function formatReviewCompleteComment(kind, summary) {
   const verdict = verdictFor(kind);
+  const details = publicProgressDetails(kind, summary);
   const lines = [
     `${VERDICT_EMOJI[verdict]} **Review completed**`,
     "",
     `**Verdict: ${verdict}**`
   ];
-  if (summary?.trim()) {
-    lines.push("", summary.trim());
+  if (details) {
+    lines.push("", details);
   }
+  lines.push("", REVIEW_COMPLETE_MARKER);
   return lines.join("\n");
 }
 
@@ -13861,17 +13895,22 @@ async function runReview() {
     comments: reviewComments
   });
   const publishWithProgress = async (kind, mode, summary, reviewComments) => {
-    await postProgressComment(comments, ctx.prNumber, REVIEW_START_COMMENT);
+    await postProgressComment(comments, ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
     try {
       const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
-      await postProgressComment(comments, ctx.prNumber, formatReviewCompleteComment(kind, summary));
-      return code;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       await postProgressComment(
         comments,
         ctx.prNumber,
-        formatReviewCompleteComment("fail-closed-infra", message)
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment(kind, summary)
+      );
+      return code;
+    } catch (err) {
+      await postProgressComment(
+        comments,
+        ctx.prNumber,
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment("fail-closed-infra")
       );
       throw err;
     }

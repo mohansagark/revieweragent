@@ -15,6 +15,11 @@ describe("argvWithDefaultInitCommand", () => {
     expect(argvWithDefaultInitCommand(["init", "--mode", "gate"])).toEqual(["init", "--mode", "gate"]);
   });
 
+  it("does not treat a flag value as a subcommand", () => {
+    expect(argvWithDefaultInitCommand(["--auth", "review"])).toEqual(["init", "--auth", "review"]);
+    expect(argvWithDefaultInitCommand(["--mode", "help"])).toEqual(["init", "--mode", "help"]);
+  });
+
   it("does not rewrite --help or --version", () => {
     expect(argvWithDefaultInitCommand(["--help"])).toEqual(["--help"]);
     expect(argvWithDefaultInitCommand(["-h"])).toEqual(["-h"]);

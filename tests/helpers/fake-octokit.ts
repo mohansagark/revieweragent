@@ -24,6 +24,12 @@ export interface FakeCheckRun {
   output?: { title?: string; summary?: string };
 }
 
+export interface FakeIssueComment {
+  id: number;
+  body: string;
+  user: { login: string };
+}
+
 export interface FakeReview {
   id: number;
   body: string;
@@ -51,6 +57,7 @@ export interface FakeGithub {
   secrets: Map<string, { encrypted_value: string; key_id: string }>;
   checks: FakeCheckRun[];
   reviews: FakeReview[];
+  issueComments: FakeIssueComment[];
   files: FakePrFile[];
   workflowRuns: FakeWorkflowRun[];
   permissions: Map<string, string>;
@@ -70,6 +77,7 @@ export interface FakeGithub {
     createReview: unknown[];
     updateReview: unknown[];
     createComment: unknown[];
+    updateComment: unknown[];
     createCheck: unknown[];
     updateCheck: unknown[];
   };
@@ -89,6 +97,7 @@ export async function createFakeGithub(): Promise<FakeGithub> {
   const secrets = new Map<string, { encrypted_value: string; key_id: string }>();
   const checks: FakeCheckRun[] = [];
   const reviews: FakeReview[] = [];
+  const issueComments: FakeIssueComment[] = [];
   const files: FakePrFile[] = [
     {
       filename: "src/auth.ts",
@@ -106,14 +115,17 @@ export async function createFakeGithub(): Promise<FakeGithub> {
     createReview: [],
     updateReview: [],
     createComment: [],
+    updateComment: [],
     createCheck: [],
     updateCheck: [],
   };
   let nextCheckId = 1;
   let nextReviewId = 1;
+  let nextCommentId = 1;
 
   const listFiles = vi.fn(async () => ({ data: files }));
   const listReviews = vi.fn(async () => ({ data: reviews }));
+  const listComments = vi.fn(async () => ({ data: issueComments }));
   const listWorkflowRuns = vi.fn(async () => ({ data: { workflow_runs: workflowRuns } }));
 
   const actions = {
@@ -152,6 +164,10 @@ export async function createFakeGithub(): Promise<FakeGithub> {
         }
         if (method === listReviews) {
           yield { data: reviews };
+          return;
+        }
+        if (method === listComments) {
+          yield { data: issueComments };
           return;
         }
         if (method === listWorkflowRuns) {
@@ -230,9 +246,23 @@ export async function createFakeGithub(): Promise<FakeGithub> {
       ),
     },
     issues: {
+      listComments,
       createComment: vi.fn(async (params: { issue_number: number; body: string }) => {
+        const comment: FakeIssueComment = {
+          id: nextCommentId++,
+          body: params.body,
+          user: { login: "github-actions[bot]" },
+        };
+        issueComments.push(comment);
         calls.createComment.push(params);
-        return { data: { id: calls.createComment.length, body: params.body } };
+        return { data: comment };
+      }),
+      updateComment: vi.fn(async (params: { comment_id: number; body: string }) => {
+        const comment = issueComments.find((c) => c.id === params.comment_id);
+        if (!comment) throw notFound(`comment ${params.comment_id}`);
+        comment.body = params.body;
+        calls.updateComment.push(params);
+        return { data: comment };
       }),
     },
     repos: {
@@ -257,6 +287,7 @@ export async function createFakeGithub(): Promise<FakeGithub> {
     secrets,
     checks,
     reviews,
+    issueComments,
     files,
     workflowRuns,
     permissions,
