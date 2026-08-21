@@ -11091,6 +11091,287 @@ function createGitHubReviewPort(octokit, owner, repo) {
   };
 }
 
+// src/provider/claude/subscription.ts
+import { spawn } from "node:child_process";
+
+// src/core/findings-schema.ts
+var SEVERITY_RANK = {
+  critical: 5,
+  high: 4,
+  medium: 3,
+  low: 2,
+  note: 1
+};
+var FINDINGS_JSON_SCHEMA = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+  type: "object",
+  additionalProperties: false,
+  required: ["summary", "findings"],
+  properties: {
+    summary: { type: "string" },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["severity", "file", "line", "message"],
+        properties: {
+          severity: { type: "string", enum: ["critical", "high", "medium", "low", "note"] },
+          file: { type: "string" },
+          line: { type: ["integer", "null"], minimum: 1 },
+          message: { type: "string", minLength: 1 }
+        }
+      }
+    }
+  }
+};
+var InvalidFindingsError = class extends Error {
+  constructor(cause) {
+    super(`Model output failed findings schema validation: ${cause}`);
+    this.name = "InvalidFindingsError";
+  }
+};
+var VALID_SEVERITIES = new Set(Object.keys(SEVERITY_RANK));
+function parseFindings(rawModelOutput) {
+  const unfenced = rawModelOutput.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+  let parsed;
+  try {
+    parsed = JSON.parse(unfenced);
+  } catch (err) {
+    throw new InvalidFindingsError(`not valid JSON: ${err.message}`);
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new InvalidFindingsError("root is not an object");
+  }
+  const obj = parsed;
+  const allowedKeys = /* @__PURE__ */ new Set(["summary", "findings"]);
+  for (const key of Object.keys(obj)) {
+    if (!allowedKeys.has(key)) {
+      throw new InvalidFindingsError(`unexpected property "${key}"`);
+    }
+  }
+  if (typeof obj.summary !== "string") {
+    throw new InvalidFindingsError('"summary" must be a string');
+  }
+  if (!Array.isArray(obj.findings)) {
+    throw new InvalidFindingsError('"findings" must be an array');
+  }
+  const findings = obj.findings.map((raw, i) => {
+    if (typeof raw !== "object" || raw === null) {
+      throw new InvalidFindingsError(`findings[${i}] is not an object`);
+    }
+    const f = raw;
+    const findingKeys = /* @__PURE__ */ new Set(["severity", "file", "line", "message"]);
+    for (const key of Object.keys(f)) {
+      if (!findingKeys.has(key)) {
+        throw new InvalidFindingsError(`findings[${i}] has unexpected property "${key}"`);
+      }
+    }
+    if (typeof f.severity !== "string" || !VALID_SEVERITIES.has(f.severity)) {
+      throw new InvalidFindingsError(`findings[${i}].severity is invalid`);
+    }
+    if (typeof f.file !== "string") {
+      throw new InvalidFindingsError(`findings[${i}].file must be a string`);
+    }
+    if (f.line !== null && (typeof f.line !== "number" || f.line < 1 || !Number.isInteger(f.line))) {
+      throw new InvalidFindingsError(`findings[${i}].line must be an integer >= 1 or null`);
+    }
+    if (typeof f.message !== "string" || f.message.length === 0) {
+      throw new InvalidFindingsError(`findings[${i}].message must be a non-empty string`);
+    }
+    return {
+      severity: f.severity,
+      file: f.file,
+      line: f.line,
+      message: f.message
+    };
+  });
+  return { summary: obj.summary, findings };
+}
+
+// src/provider/claude/subscription.ts
+var ModelBackendError = class extends Error {
+  constructor(message, classifiable) {
+    super(message);
+    this.classifiable = classifiable;
+    this.name = "ModelBackendError";
+  }
+  classifiable;
+};
+function classifyCliSpawnError(err, installFailed2) {
+  if (err.code === "E2BIG" || /\bE2BIG\b/i.test(err.message ?? "")) return { kind: "e2big" };
+  if (installFailed2) return { kind: "npm_fetch_fail_cache_miss" };
+  return { kind: "cli_missing" };
+}
+function isSubscriptionQuotaMessage(text) {
+  const t = text.toLowerCase();
+  return /credit|quota|billing|usage.?limit/.test(t);
+}
+function cliInstallFailed() {
+  return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
+}
+function callSubscriptionBackend(systemPrompt, userPayload, claudeBin = "claude") {
+  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return Promise.reject(
+      new ModelBackendError("CLAUDE_CODE_OAUTH_TOKEN is not set", { kind: "missing_secret" })
+    );
+  }
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(
+        claudeBin,
+        [
+          "-p",
+          "--output-format",
+          "json",
+          "--tools",
+          "",
+          "--model",
+          "sonnet",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--json-schema",
+          JSON.stringify(FINDINGS_JSON_SCHEMA),
+          "--system-prompt",
+          systemPrompt,
+          userPayload
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] }
+      );
+    } catch (err) {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn claude CLI: ${err.message}`,
+          classifyCliSpawnError(err, cliInstallFailed())
+        )
+      );
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => stdout += chunk.toString("utf8"));
+    child.stderr.on("data", (chunk) => stderr += chunk.toString("utf8"));
+    child.on("error", (err) => {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn claude CLI: ${err.message}`,
+          classifyCliSpawnError(err, cliInstallFailed())
+        )
+      );
+    });
+    child.on("exit", () => {
+      let envelope;
+      try {
+        envelope = JSON.parse(stdout);
+      } catch {
+        reject(
+          new ModelBackendError(`claude CLI produced non-JSON output: ${stderr || stdout}`, {
+            kind: "invalid_json"
+          })
+        );
+        return;
+      }
+      if (envelope.is_error) {
+        const status = envelope.api_error_status;
+        if (status === 401 || status === 403) {
+          reject(new ModelBackendError("Claude Code auth rejected", { kind: status === 401 ? "http_401" : "http_403" }));
+          return;
+        }
+        if (status === 429) {
+          reject(new ModelBackendError("Claude Code rate limited", { kind: "http_429" }));
+          return;
+        }
+        if (status === 400) {
+          const blob = `${JSON.stringify(envelope)}
+${stderr}`;
+          const quotaSignal = isSubscriptionQuotaMessage(blob);
+          reject(
+            new ModelBackendError(quotaSignal ? "Claude Code plan-quota error" : "Claude Code HTTP 400", {
+              kind: "http_400",
+              auth: "subscription",
+              quotaSignal
+            })
+          );
+          return;
+        }
+        if (status && status >= 500) {
+          reject(new ModelBackendError("Claude Code backend overload", { kind: "http_5xx" }));
+          return;
+        }
+        reject(new ModelBackendError("Claude Code reported an error with no recognized status", { kind: "invalid_json" }));
+        return;
+      }
+      if (envelope.structured_output === void 0) {
+        reject(new ModelBackendError("claude CLI response had no structured_output", { kind: "invalid_json" }));
+        return;
+      }
+      resolve(JSON.stringify(envelope.structured_output));
+    });
+  });
+}
+
+// src/provider/cursor/agent.ts
+var CURSOR_MODEL = "composer-1";
+function buildCursorAgentArgv(opts) {
+  return [
+    "-p",
+    "--output-format",
+    "json",
+    "--mode",
+    "ask",
+    "--sandbox",
+    "enabled",
+    "--trust",
+    "--model",
+    opts.model ?? CURSOR_MODEL,
+    "--workspace",
+    opts.workspace,
+    opts.prompt
+  ];
+}
+function classifyCursorSpawnError(err, installFailed2) {
+  if (err.code === "E2BIG") return { kind: "e2big" };
+  if (installFailed2) return { kind: "npm_fetch_fail_cache_miss" };
+  return { kind: "cli_missing" };
+}
+function parseCursorEnvelope(stdout, exitCode, stderr) {
+  const blob = `${stdout}
+${stderr}`;
+  if (exitCode !== 0 && !stdout.trim()) {
+    if (/401|403|unauthorized|forbidden|revoked/i.test(blob)) {
+      throw new ModelBackendError("Cursor auth rejected", { kind: /403|forbidden/.test(blob) ? "http_403" : "http_401" });
+    }
+    if (/429|rate limit/i.test(blob)) {
+      throw new ModelBackendError("Cursor rate limited", { kind: "http_429" });
+    }
+    if (/credit|quota|billing|usage.?limit/i.test(blob)) {
+      throw new ModelBackendError("Cursor plan-quota error", {
+        kind: "http_400",
+        auth: "subscription",
+        quotaSignal: true
+      });
+    }
+    if (/5\d\d|overload|unavailable/i.test(blob)) {
+      throw new ModelBackendError("Cursor backend overload", { kind: "http_5xx" });
+    }
+    throw new ModelBackendError(`Cursor CLI failed: ${stderr || "no output"}`, { kind: "invalid_json" });
+  }
+  let envelope;
+  try {
+    envelope = JSON.parse(stdout);
+  } catch {
+    throw new ModelBackendError(`Cursor CLI produced non-JSON output: ${stderr || stdout}`, { kind: "invalid_json" });
+  }
+  if (envelope.is_error) {
+    throw new ModelBackendError("Cursor CLI reported is_error", { kind: "invalid_json" });
+  }
+  if (typeof envelope.result !== "string" || envelope.result.trim() === "") {
+    throw new ModelBackendError("Cursor CLI response had no result text", { kind: "invalid_json" });
+  }
+  return envelope.result;
+}
+
 // src/cli/write-workflow.ts
 var WORKFLOW_MANAGED_HEADER = [
   "# Managed by revieweragent (npmjs.com/package/revieweragent)",
@@ -11313,11 +11594,14 @@ function parseConfig(raw) {
   return config;
 }
 function validateConfig(config) {
-  if (config.provider !== "claude") {
+  if (config.provider !== "claude" && config.provider !== "cursor") {
     throw new InvalidConfigError(`unsupported provider "${String(config.provider)}"`);
   }
   if (config.auth !== "subscription" && config.auth !== "api-key") {
     throw new InvalidConfigError(`unsupported auth "${String(config.auth)}"`);
+  }
+  if (config.provider === "cursor" && config.auth !== "subscription") {
+    throw new InvalidConfigError('provider "cursor" only supports auth: subscription');
   }
   if (config.mode !== "advisory" && config.mode !== "gate") {
     throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);
@@ -11349,11 +11633,24 @@ function validateConfig(config) {
 }
 var MANAGED_HEADER_LINE = MANAGED_HEADER.split("\n")[0];
 
+// src/cli/merge-group-reuse.ts
+function parseMergeGroupPrNumber(headRef) {
+  if (!headRef) return void 0;
+  const match2 = headRef.match(/\/pr-(\d+)-[0-9a-f]+$/i);
+  if (!match2) return void 0;
+  return Number(match2[1]);
+}
+function shouldReuseMergeGroupCheck(opts) {
+  if (opts.checkConclusion !== "success") return false;
+  if ((opts.checkTitle ?? "").startsWith("Review skipped:")) return false;
+  return opts.mergeGroupBaseSha === opts.pullBaseSha;
+}
+
 // src/cli/review-event-context.ts
 import { readFileSync } from "node:fs";
 var UnsupportedEventError = class extends Error {
   constructor(eventName) {
-    super(`Unsupported or unhandled event: ${eventName} (merge_group is not in v1, SPEC.md \xA70/\xA78)`);
+    super(`Unsupported or unhandled event: ${eventName}`);
     this.name = "UnsupportedEventError";
   }
 };
@@ -11403,6 +11700,38 @@ async function resolveEventContext(octokit, owner, repo) {
       commenterLogin: payload.comment.user.login
     };
   }
+  if (eventName === "merge_group") {
+    const payload = readEventPayload();
+    const group = payload.merge_group;
+    const prNumber = parseMergeGroupPrNumber(group.head_ref);
+    if (prNumber === void 0) {
+      return {
+        eventName: "merge_group",
+        action: "checks_requested",
+        headSha: group.head_sha,
+        baseSha: group.base_sha,
+        isDraft: false,
+        isFork: false,
+        prAuthorLogin: "",
+        title: "",
+        body: ""
+      };
+    }
+    const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
+    const isFork = pr.head.repo?.full_name !== `${owner}/${repo}`;
+    return {
+      eventName: "merge_group",
+      action: "checks_requested",
+      prNumber,
+      headSha: group.head_sha,
+      baseSha: group.base_sha,
+      isDraft: pr.draft ?? false,
+      isFork,
+      prAuthorLogin: pr.user?.login ?? "",
+      title: pr.title ?? "",
+      body: pr.body ?? ""
+    };
+  }
   throw new UnsupportedEventError(eventName ?? "(unset)");
 }
 
@@ -11429,6 +11758,9 @@ async function decideSkip(octokit, owner, repo, ctx, config) {
     if (ctx.isFork && config.fork_policy === "comment-gated") {
       return { skip: true, reason: "comment-gated fork PR with no /review yet" };
     }
+    return { skip: false };
+  }
+  if (ctx.eventName === "merge_group") {
     return { skip: false };
   }
   if (!ctx.commentBody?.includes(config.trigger_phrase)) {
@@ -13296,6 +13628,16 @@ minimatch.escape = escape;
 minimatch.unescape = unescape;
 
 // src/core/diff-limits.ts
+var COMPARE_FILES_CAP = 300;
+var CompareTruncatedError = class extends Error {
+  constructor() {
+    super("GitHub compare API truncated the file list");
+    this.name = "CompareTruncatedError";
+  }
+};
+function compareResponseIsTruncated(data) {
+  return data.truncated === true || (data.files?.length ?? 0) >= COMPARE_FILES_CAP;
+}
 async function fetchPrFiles(octokit, owner, repo, pr) {
   const files = [];
   for await (const response of octokit.paginate.iterator(octokit.pulls.listFiles, {
@@ -13309,6 +13651,17 @@ async function fetchPrFiles(octokit, owner, repo, pr) {
     }
   }
   return files;
+}
+async function fetchCompareFiles(octokit, owner, repo, baseSha, headSha) {
+  const { data } = await octokit.repos.compareCommits({ owner, repo, base: baseSha, head: headSha });
+  if (compareResponseIsTruncated(data)) {
+    throw new CompareTruncatedError();
+  }
+  return (data.files ?? []).map((f) => ({
+    filename: f.filename,
+    changes: f.changes,
+    patch: f.patch
+  }));
 }
 function filterExcluded(files, excludeGlobs) {
   return files.filter((f) => !excludeGlobs.some((glob) => minimatch(f.filename, glob, { dot: true })));
@@ -13418,101 +13771,6 @@ Additional maintainer review policy:
 ${maintainerInstructions}`;
 }
 
-// src/core/findings-schema.ts
-var SEVERITY_RANK = {
-  critical: 5,
-  high: 4,
-  medium: 3,
-  low: 2,
-  note: 1
-};
-var FINDINGS_JSON_SCHEMA = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  type: "object",
-  additionalProperties: false,
-  required: ["summary", "findings"],
-  properties: {
-    summary: { type: "string" },
-    findings: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["severity", "file", "line", "message"],
-        properties: {
-          severity: { type: "string", enum: ["critical", "high", "medium", "low", "note"] },
-          file: { type: "string" },
-          line: { type: ["integer", "null"], minimum: 1 },
-          message: { type: "string", minLength: 1 }
-        }
-      }
-    }
-  }
-};
-var InvalidFindingsError = class extends Error {
-  constructor(cause) {
-    super(`Model output failed findings schema validation: ${cause}`);
-    this.name = "InvalidFindingsError";
-  }
-};
-var VALID_SEVERITIES = new Set(Object.keys(SEVERITY_RANK));
-function parseFindings(rawModelOutput) {
-  const unfenced = rawModelOutput.trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
-  let parsed;
-  try {
-    parsed = JSON.parse(unfenced);
-  } catch (err) {
-    throw new InvalidFindingsError(`not valid JSON: ${err.message}`);
-  }
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new InvalidFindingsError("root is not an object");
-  }
-  const obj = parsed;
-  const allowedKeys = /* @__PURE__ */ new Set(["summary", "findings"]);
-  for (const key of Object.keys(obj)) {
-    if (!allowedKeys.has(key)) {
-      throw new InvalidFindingsError(`unexpected property "${key}"`);
-    }
-  }
-  if (typeof obj.summary !== "string") {
-    throw new InvalidFindingsError('"summary" must be a string');
-  }
-  if (!Array.isArray(obj.findings)) {
-    throw new InvalidFindingsError('"findings" must be an array');
-  }
-  const findings = obj.findings.map((raw, i) => {
-    if (typeof raw !== "object" || raw === null) {
-      throw new InvalidFindingsError(`findings[${i}] is not an object`);
-    }
-    const f = raw;
-    const findingKeys = /* @__PURE__ */ new Set(["severity", "file", "line", "message"]);
-    for (const key of Object.keys(f)) {
-      if (!findingKeys.has(key)) {
-        throw new InvalidFindingsError(`findings[${i}] has unexpected property "${key}"`);
-      }
-    }
-    if (typeof f.severity !== "string" || !VALID_SEVERITIES.has(f.severity)) {
-      throw new InvalidFindingsError(`findings[${i}].severity is invalid`);
-    }
-    if (typeof f.file !== "string") {
-      throw new InvalidFindingsError(`findings[${i}].file must be a string`);
-    }
-    if (f.line !== null && (typeof f.line !== "number" || f.line < 1 || !Number.isInteger(f.line))) {
-      throw new InvalidFindingsError(`findings[${i}].line must be an integer >= 1 or null`);
-    }
-    if (typeof f.message !== "string" || f.message.length === 0) {
-      throw new InvalidFindingsError(`findings[${i}].message must be a non-empty string`);
-    }
-    return {
-      severity: f.severity,
-      file: f.file,
-      line: f.line,
-      message: f.message
-    };
-  });
-  return { summary: obj.summary, findings };
-}
-
 // src/core/gate-evaluator.ts
 function evaluateGate(findings, blockSeverity) {
   if (blockSeverity === "any") {
@@ -13531,6 +13789,7 @@ function classifyError(err) {
     case "http_401":
     case "http_403":
     case "invalid_json":
+    case "e2big":
       return "fail-closed";
     case "http_429":
     case "http_5xx":
@@ -13607,22 +13866,24 @@ async function publishCheckAndReview(opts) {
   const outcome = checkOutcomeFor(opts.kind, opts.mode);
   const title = outcome.titlePrefix ? `${outcome.titlePrefix} ${opts.kind}` : opts.kind;
   console.log(`revieweragent: ${opts.kind} -> ${outcome.conclusion} (exit ${outcome.exitCode})`);
-  try {
-    const existing = await opts.reviews.findExistingReview(opts.prNumber, opts.headSha);
-    if (existing) {
-      await opts.reviews.updateReview(existing.id, opts.prNumber, opts.headSha, opts.summary);
-    } else {
-      await opts.reviews.createReview(opts.prNumber, opts.headSha, opts.summary, opts.comments ?? []);
+  if (opts.prNumber !== void 0) {
+    try {
+      const existing = await opts.reviews.findExistingReview(opts.prNumber, opts.headSha);
+      if (existing) {
+        await opts.reviews.updateReview(existing.id, opts.prNumber, opts.headSha, opts.summary);
+      } else {
+        await opts.reviews.createReview(opts.prNumber, opts.headSha, opts.summary, opts.comments ?? []);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await opts.checks.upsertCheck(
+        opts.headSha,
+        "failure",
+        "fail-closed-infra",
+        `Reviews API failed: ${message}`
+      );
+      throw err;
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await opts.checks.upsertCheck(
-      opts.headSha,
-      "failure",
-      "fail-closed-infra",
-      `Reviews API failed: ${message}`
-    );
-    throw err;
   }
   await opts.checks.upsertCheck(opts.headSha, outcome.conclusion, title, opts.summary);
   return outcome.exitCode;
@@ -13684,117 +13945,6 @@ function formatReviewCompleteComment(kind, summary) {
   return lines.join("\n");
 }
 
-// src/provider/claude/subscription.ts
-import { spawn } from "node:child_process";
-var ModelBackendError = class extends Error {
-  constructor(message, classifiable) {
-    super(message);
-    this.classifiable = classifiable;
-    this.name = "ModelBackendError";
-  }
-  classifiable;
-};
-function classifyCliSpawnError(err, installFailed) {
-  if (installFailed) return { kind: "npm_fetch_fail_cache_miss" };
-  return { kind: "cli_missing" };
-}
-function isSubscriptionQuotaMessage(text) {
-  const t = text.toLowerCase();
-  return /credit|quota|billing|usage.?limit/.test(t);
-}
-function cliInstallFailed() {
-  return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
-}
-function callSubscriptionBackend(systemPrompt, userPayload, claudeBin = "claude") {
-  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    return Promise.reject(
-      new ModelBackendError("CLAUDE_CODE_OAUTH_TOKEN is not set", { kind: "missing_secret" })
-    );
-  }
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      claudeBin,
-      [
-        "-p",
-        "--output-format",
-        "json",
-        "--tools",
-        "",
-        "--model",
-        "sonnet",
-        "--disable-slash-commands",
-        "--strict-mcp-config",
-        "--json-schema",
-        JSON.stringify(FINDINGS_JSON_SCHEMA),
-        "--system-prompt",
-        systemPrompt,
-        userPayload
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] }
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => stdout += chunk.toString("utf8"));
-    child.stderr.on("data", (chunk) => stderr += chunk.toString("utf8"));
-    child.on("error", (err) => {
-      reject(
-        new ModelBackendError(
-          `Failed to spawn claude CLI: ${err.message}`,
-          classifyCliSpawnError(err, cliInstallFailed())
-        )
-      );
-    });
-    child.on("exit", () => {
-      let envelope;
-      try {
-        envelope = JSON.parse(stdout);
-      } catch {
-        reject(
-          new ModelBackendError(`claude CLI produced non-JSON output: ${stderr || stdout}`, {
-            kind: "invalid_json"
-          })
-        );
-        return;
-      }
-      if (envelope.is_error) {
-        const status = envelope.api_error_status;
-        if (status === 401 || status === 403) {
-          reject(new ModelBackendError("Claude Code auth rejected", { kind: status === 401 ? "http_401" : "http_403" }));
-          return;
-        }
-        if (status === 429) {
-          reject(new ModelBackendError("Claude Code rate limited", { kind: "http_429" }));
-          return;
-        }
-        if (status === 400) {
-          const blob = `${JSON.stringify(envelope)}
-${stderr}`;
-          const quotaSignal = isSubscriptionQuotaMessage(blob);
-          reject(
-            new ModelBackendError(quotaSignal ? "Claude Code plan-quota error" : "Claude Code HTTP 400", {
-              kind: "http_400",
-              auth: "subscription",
-              quotaSignal
-            })
-          );
-          return;
-        }
-        if (status && status >= 500) {
-          reject(new ModelBackendError("Claude Code backend overload", { kind: "http_5xx" }));
-          return;
-        }
-        reject(new ModelBackendError("Claude Code reported an error with no recognized status", { kind: "invalid_json" }));
-        return;
-      }
-      if (envelope.structured_output === void 0) {
-        reject(new ModelBackendError("claude CLI response had no structured_output", { kind: "invalid_json" }));
-        return;
-      }
-      resolve(JSON.stringify(envelope.structured_output));
-    });
-  });
-}
-
 // src/provider/claude/api-key.ts
 var DEFAULT_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
 var ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
@@ -13847,6 +13997,69 @@ function classifyHttpStatus(status) {
   return { kind: "invalid_json" };
 }
 
+// src/provider/cursor/backend.ts
+import { spawn as spawn2 } from "node:child_process";
+import { mkdtempSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+function installFailed() {
+  return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
+}
+function callCursorBackend(systemPrompt, userPayload, agentBin = process.env.REVIEWERAGENT_CURSOR_BIN ?? "agent") {
+  if (!process.env.CURSOR_API_KEY) {
+    return Promise.reject(new ModelBackendError("CURSOR_API_KEY is not set", { kind: "missing_secret" }));
+  }
+  const root = process.env.RUNNER_TEMP ?? tmpdir();
+  const workspace = mkdtempSync(join(root, "revieweragent-cursor-ws-"));
+  const isolatedHome = mkdtempSync(join(root, "revieweragent-cursor-home-"));
+  mkdirSync(join(isolatedHome, ".cursor"), { recursive: true });
+  const prompt = `${systemPrompt}
+
+${userPayload}`;
+  const childEnv = { ...process.env };
+  childEnv.HOME = isolatedHome;
+  childEnv.XDG_CONFIG_HOME = isolatedHome;
+  childEnv.CURSOR_CONFIG_DIR = join(isolatedHome, ".cursor");
+  delete childEnv.ANTHROPIC_API_KEY;
+  delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn2(agentBin, buildCursorAgentArgv({ workspace, prompt }), {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: childEnv
+      });
+    } catch (err) {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn Cursor agent: ${err.message}`,
+          classifyCursorSpawnError(err, installFailed())
+        )
+      );
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => stdout += chunk.toString("utf8"));
+    child.stderr.on("data", (chunk) => stderr += chunk.toString("utf8"));
+    child.on("error", (err) => {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn Cursor agent: ${err.message}`,
+          classifyCursorSpawnError(err, installFailed())
+        )
+      );
+    });
+    child.on("exit", (code) => {
+      try {
+        resolve(parseCursorEnvelope(stdout, code ?? 1, stderr));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
 // src/cli/review.ts
 var CONFIG_PATH = ".revieweragent.yml";
 var INSTRUCTIONS_PATH = ".revieweragent/instructions.md";
@@ -13894,24 +14107,18 @@ async function runReview() {
     summary,
     comments: reviewComments
   });
+  const maybeProgress = async (pr, marker, body) => {
+    if (pr === void 0) return;
+    await postProgressComment(comments, pr, marker, body);
+  };
   const publishWithProgress = async (kind, mode, summary, reviewComments) => {
-    await postProgressComment(comments, ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
+    await maybeProgress(ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
     try {
       const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
-      await postProgressComment(
-        comments,
-        ctx.prNumber,
-        REVIEW_COMPLETE_MARKER,
-        formatReviewCompleteComment(kind, summary)
-      );
+      await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment(kind, summary));
       return code;
     } catch (err) {
-      await postProgressComment(
-        comments,
-        ctx.prNumber,
-        REVIEW_COMPLETE_MARKER,
-        formatReviewCompleteComment("fail-closed-infra")
-      );
+      await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment("fail-closed-infra"));
       throw err;
     }
   };
@@ -13934,6 +14141,30 @@ async function runReview() {
     console.log(`No-op: ${skipDecision.reason}`);
     return 0;
   }
+  if (ctx.eventName === "merge_group" && ctx.prNumber !== void 0) {
+    const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: ctx.prNumber });
+    const { data: listed } = await octokit.checks.listForRef({
+      owner,
+      repo,
+      ref: pr.head.sha,
+      check_name: JOB_NAME
+    });
+    const existing = listed.check_runs[0];
+    if (shouldReuseMergeGroupCheck({
+      checkConclusion: existing?.conclusion ?? void 0,
+      checkTitle: existing?.output?.title ?? void 0,
+      mergeGroupBaseSha: ctx.baseSha,
+      pullBaseSha: pr.base.sha
+    })) {
+      await checks.upsertCheck(
+        ctx.headSha,
+        "success",
+        "PASS",
+        `Reused PR #${ctx.prNumber} review at ${pr.head.sha}.`
+      );
+      return 0;
+    }
+  }
   if (ctx.eventName === "pull_request_target" && ctx.isFork && config.fork_policy === "auto") {
     const underCap = await isUnderActorCap(
       octokit,
@@ -13947,7 +14178,17 @@ async function runReview() {
       return 0;
     }
   }
-  const files = await fetchPrFiles(octokit, owner, repo, ctx.prNumber);
+  let files;
+  try {
+    files = ctx.eventName === "merge_group" || ctx.prNumber === void 0 ? await fetchCompareFiles(octokit, owner, repo, ctx.baseSha, ctx.headSha) : await fetchPrFiles(octokit, owner, repo, ctx.prNumber);
+  } catch (err) {
+    if (!(err instanceof CompareTruncatedError)) throw err;
+    const truncatedOutcome = decideLimitOutcome(config, true);
+    if (truncatedOutcome.kind === "advisory-skip") {
+      return await publishWithProgress("availability-skip", config.mode, "Diff too large \u2014 skipped review.");
+    }
+    return await publishWithProgress("fail-closed-infra", config.mode, "Diff too large \u2014 skipped review.");
+  }
   const included = filterExcluded(files, config.exclude);
   const { overLimit } = checkLimits(config, files);
   const limitOutcome = decideLimitOutcome(config, overLimit);
@@ -13963,7 +14204,7 @@ async function runReview() {
     body: ctx.body,
     diff: formatFilePatches(included)
   });
-  if (config.auth === "subscription" && process.env.ANTHROPIC_API_KEY) {
+  if (config.provider === "claude" && config.auth === "subscription" && process.env.ANTHROPIC_API_KEY) {
     return await publishWithProgress(
       "fail-closed-infra",
       config.mode,
@@ -13972,7 +14213,13 @@ async function runReview() {
   }
   let rawOutput;
   try {
-    rawOutput = config.auth === "subscription" ? await callSubscriptionBackend(systemPrompt, userPayload) : await callApiKeyBackend(systemPrompt, userPayload);
+    if (config.provider === "cursor") {
+      rawOutput = await callCursorBackend(systemPrompt, userPayload);
+    } else if (config.auth === "subscription") {
+      rawOutput = await callSubscriptionBackend(systemPrompt, userPayload);
+    } else {
+      rawOutput = await callApiKeyBackend(systemPrompt, userPayload);
+    }
   } catch (err) {
     if (err instanceof ModelBackendError) {
       const errClass = classifyError(err.classifiable);
@@ -13980,6 +14227,14 @@ async function runReview() {
         errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
         config.mode,
         err.message
+      );
+    }
+    const code = err.code;
+    if (code === "E2BIG") {
+      return await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit."
       );
     }
     throw err;
