@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createFakeGithub, type FakeGithub } from "../helpers/fake-octokit.js";
-import { createTempGitRepo, writeEventPayload } from "../helpers/temp-git-repo.js";
-import { serializeConfig, defaultConfig } from "../../src/core/config-schema.js";
+import { createTempGitRepo, writeEventPayload, type TempGitRepo } from "../helpers/temp-git-repo.js";
+import { serializeConfig, defaultConfig, type RevieweragentConfig } from "../../src/core/config-schema.js";
 import { ModelBackendError } from "../../src/provider/claude/subscription.js";
 
 const githubState = vi.hoisted(() => ({
@@ -13,7 +13,7 @@ const githubState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/platform/github/client.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/platform/github/client.js");
   return {
     ...actual,
     createGitHubClient: () => githubState.current!.octokit,
@@ -22,7 +22,7 @@ vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
 });
 
 vi.mock("../../src/provider/claude/subscription.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/provider/claude/subscription.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/provider/claude/subscription.js");
   return {
     ...actual,
     callSubscriptionBackend: (...args: unknown[]) => githubState.subscription(...args),
@@ -30,7 +30,7 @@ vi.mock("../../src/provider/claude/subscription.js", async (importOriginal) => {
 });
 
 vi.mock("../../src/provider/claude/api-key.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/provider/claude/api-key.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/provider/claude/api-key.js");
   return {
     ...actual,
     callApiKeyBackend: (...args: unknown[]) => githubState.apiKey(...args),
@@ -81,10 +81,10 @@ function forkEvent() {
 describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
   const originalCwd = process.cwd();
   const originalEnv = { ...process.env };
-  let repo: ReturnType<typeof createTempGitRepo>;
+  let repo: TempGitRepo;
 
   async function setup(opts?: {
-    config?: Parameters<typeof defaultConfig>[0];
+    config?: Partial<RevieweragentConfig>;
     event?: unknown;
     eventName?: string;
     extraEnv?: Record<string, string>;

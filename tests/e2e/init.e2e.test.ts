@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createFakeGithub, type FakeGithub } from "../helpers/fake-octokit.js";
-import { createTempGitRepo } from "../helpers/temp-git-repo.js";
+import { createTempGitRepo, type TempGitRepo } from "../helpers/temp-git-repo.js";
 
 const githubState = vi.hoisted(() => ({
   current: undefined as FakeGithub | undefined,
 }));
 
 vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/platform/github/client.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/platform/github/client.js");
   return {
     ...actual,
     createGitHubClient: () => githubState.current!.octokit,
@@ -23,7 +23,7 @@ import { MANAGED_MARKER } from "../../src/core/config-schema.js";
 
 describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
   const originalCwd = process.cwd();
-  let repo: ReturnType<typeof createTempGitRepo>;
+  let repo: TempGitRepo;
 
   async function setup() {
     githubState.current = await createFakeGithub();
