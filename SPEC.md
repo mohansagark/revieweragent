@@ -1,7 +1,8 @@
 # revieweragent — Design Spec
 
 Interactive CLI (`npx revieweragent`) that wires automatic AI PR reviews into a
-git repo. Published to npm as `revieweragent` (`1.1.0`).
+git repo. Published to npm as `revieweragent` (`1.2.0` in-tree; `1.1.0` is the last
+published tag until this release is cut).
 
 Status: **v1 implemented and verified end-to-end against a real repo
 (2026-08-19)** — `init`, `review` (subscription auth, gate mode), and the
@@ -1625,7 +1626,7 @@ ship in v1, v2, or v3. A row appearing here does not mean it is in the first rel
 | Draft PRs | Skipped via job-level `if:` — job does not run at all (corrected after live testing; §9) |
 | Non-PR `issue_comment` | Skipped via job-level `if:` (payload has no `issue.pull_request`) |
 | Concurrency | Cancel-in-progress; PR number **or** issue number **or** merge-group SHA |
-| Fork PRs | Default **`fork_policy: auto | comment-gated`** only (no `off`/`on`). Per-actor hourly cap counts **inference only**, actor = PR author, SHA from `run-name` on forks; 400/429 quota is availability skip |
+| Fork PRs | Default **`fork_policy`:** `auto` or `comment-gated` only (no `off`/`on`). Per-actor hourly cap counts **inference only**, actor = PR author, SHA from `run-name` on forks; 400/429 quota is availability skip |
 | First-time contributor toggle | Not an abuse gate; do not rely on it |
 | Checkout | Base only; never PR head |
 | Diff source | GitHub API as data |

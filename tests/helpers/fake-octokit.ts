@@ -71,6 +71,19 @@ export interface FakeGithub {
     base: { sha: string; repo: { full_name: string } };
   }>;
   associatedPulls: Array<{ head: { sha: string } }>;
+  defaultBranch: string;
+  contentPaths: Set<string>;
+  branchProtection: {
+    required_status_checks: {
+      strict?: boolean;
+      contexts?: string[];
+      checks?: Array<{ context: string }>;
+    } | null;
+    enforce_admins?: { enabled?: boolean } | boolean | null;
+    required_pull_request_reviews?: unknown;
+    restrictions?: unknown;
+  } | undefined;
+  protectionPuts: unknown[];
   calls: {
     putSecret: Array<{ secret_name: string; encrypted_value: string; key_id: string }>;
     deleteSecret: string[];
@@ -109,6 +122,9 @@ export async function createFakeGithub(): Promise<FakeGithub> {
   const permissions = new Map<string, string>([["alice", "write"]]);
   const pullRequests = new Map();
   const associatedPulls: Array<{ head: { sha: string } }> = [];
+  const contentPaths = new Set<string>();
+  const protectionPuts: unknown[] = [];
+  let branchProtection: FakeGithub["branchProtection"];
   const calls: FakeGithub["calls"] = {
     putSecret: [],
     deleteSecret: [],
@@ -266,12 +282,44 @@ export async function createFakeGithub(): Promise<FakeGithub> {
       }),
     },
     repos: {
+      get: vi.fn(async () => ({ data: { default_branch: "main" } })),
+      getContent: vi.fn(async ({ path }: { path: string }) => {
+        if (!contentPaths.has(path)) throw notFound(path);
+        return { data: { type: "file", path } };
+      }),
+      getBranchProtection: vi.fn(async () => {
+        if (!branchProtection) throw notFound("branch protection");
+        return { data: branchProtection };
+      }),
+      updateBranchProtection: vi.fn(async (params: Record<string, unknown>) => {
+        protectionPuts.push(params);
+        const checks = (params.required_status_checks as { contexts?: string[]; checks?: Array<{ context: string }> }) ?? {
+          contexts: [],
+          checks: [],
+        };
+        branchProtection = {
+          required_status_checks: {
+            strict: true,
+            contexts: checks.contexts ?? [],
+            checks: checks.checks ?? (checks.contexts ?? []).map((context) => ({ context })),
+          },
+          enforce_admins: { enabled: Boolean(params.enforce_admins) },
+          required_pull_request_reviews: params.required_pull_request_reviews ?? null,
+          restrictions: params.restrictions ?? null,
+        };
+        return { data: branchProtection };
+      }),
       getCollaboratorPermissionLevel: vi.fn(async ({ username }: { username: string }) => {
         const permission = permissions.get(username);
         if (!permission) throw notFound(username);
         return { data: { permission } };
       }),
       listPullRequestsAssociatedWithCommit: vi.fn(async () => ({ data: associatedPulls })),
+      compareCommits: vi.fn(async () => ({
+        data: {
+          files: files.map((f) => ({ filename: f.filename, changes: f.changes, patch: f.patch })),
+        },
+      })),
     },
     users: {
       getAuthenticated: vi.fn(async () => ({ data: { login: "alice" } })),
@@ -293,6 +341,15 @@ export async function createFakeGithub(): Promise<FakeGithub> {
     permissions,
     pullRequests,
     associatedPulls,
+    defaultBranch: "main",
+    contentPaths,
+    get branchProtection() {
+      return branchProtection;
+    },
+    set branchProtection(value) {
+      branchProtection = value;
+    },
+    protectionPuts,
     calls,
     decryptSecret(encryptedValue: string): string {
       const sealed = sodium.from_base64(encryptedValue, sodium.base64_variants.ORIGINAL);

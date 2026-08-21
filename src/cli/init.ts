@@ -5,15 +5,9 @@ import { createGitHubClient, parseOwnerRepo, resolveGitHubToken } from "../platf
 import { getGitRemoteUrl } from "../core/git.js";
 import { createGitHubSecretsPort } from "../platform/github/secrets.js";
 import { loadPinnedShas } from "../core/pinned-shas.js";
-import {
-  defaultConfig,
-  type AuthType,
-  type Mode,
-  type BlockSeverity,
-  type RevieweragentConfig,
-  BLOCK_SEVERITY_VALUES,
-} from "../core/config-schema.js";
-import { readCachedCredential, writeCachedCredential } from "../core/credential-cache.js";
+import { defaultConfig, type AuthType, type Mode, type BlockSeverity, type RevieweragentConfig, type ProviderId, BLOCK_SEVERITY_VALUES } from "../core/config-schema.js";
+import { loadPersistedCredential, persistCachedCredential } from "../core/credential-cache.js";
+import { secretNameFor, unusedSecretNames } from "../core/secret-names.js";
 import {
   requiredDependenciesFor,
   runFixCommand,
@@ -25,16 +19,16 @@ import {
 } from "./dependency-checks.js";
 import { runSetupToken } from "../provider/claude/setup-token.js";
 import { validateApiKey } from "../provider/claude/api-key-credential.js";
-import { claudeProvider } from "../provider/claude/registry-entry.js";
-import { listProvidersForCategory, type PromptCategory } from "../provider/registry.js";
+import { providerRegistry, listProvidersForCategory, type PromptCategory } from "../provider/registry.js";
 import { buildWorkflowYaml, resolveWorkflowWrite, isManagedWorkflow } from "./write-workflow.js";
 import { resolveConfigWrite, isManagedConfig } from "./write-config.js";
+import { applyManagedCodeowners } from "./codeowners.js";
 import { printCodeownersRecommendation } from "./print-codeowners.js";
 import { printBranchProtectionInstructions } from "./print-protection-instructions.js";
 import { commitAndMaybePush } from "./commit-push.js";
 
 export interface InitOptions {
-  provider: "claude";
+  provider: ProviderId;
   auth: AuthType;
   mode: Mode;
   severity: BlockSeverity;
@@ -42,6 +36,9 @@ export interface InitOptions {
   nonInteractive: boolean;
   commit: boolean;
   push: boolean;
+  writeCodeowners: boolean;
+  codeownersUser?: string;
+  noKeychain?: boolean;
 }
 
 export class MissingInputError extends Error {
@@ -63,14 +60,19 @@ export function parseNonInteractiveOptions(argv: {
   severity?: string;
   oauthToken?: string;
   apiKey?: string;
+  cursorApiKey?: string;
   commit?: boolean;
   push?: boolean;
+  codeowners?: string;
+  noCodeowners?: boolean;
+  noKeychain?: boolean;
 }): InitOptions {
-  const provider = argv.provider ?? "claude";
-  if (provider !== "claude") throw new MissingInputError("provider");
+  const provider = (argv.provider ?? "claude") as ProviderId;
+  if (provider !== "claude" && provider !== "cursor") throw new MissingInputError("provider");
 
   const auth = argv.auth as AuthType | undefined;
   if (auth !== "subscription" && auth !== "api-key") throw new MissingInputError("auth");
+  if (provider === "cursor" && auth !== "subscription") throw new MissingInputError("auth");
 
   const mode = (argv.mode as Mode | undefined) ?? "advisory";
   if (mode !== "advisory" && mode !== "gate") throw new MissingInputError("mode");
@@ -80,21 +82,31 @@ export function parseNonInteractiveOptions(argv: {
     throw new MissingInputError("severity");
   }
 
-  const credential =
-    auth === "api-key"
-      ? (argv.apiKey ?? process.env.ANTHROPIC_API_KEY)
-      : (argv.oauthToken ?? process.env.CLAUDE_CODE_OAUTH_TOKEN);
-  if (!credential) throw new MissingInputError(auth === "api-key" ? "api-key" : "oauth-token");
+  let credential: string | undefined;
+  if (provider === "cursor") {
+    credential = argv.cursorApiKey ?? process.env.CURSOR_API_KEY;
+    if (!credential) throw new MissingInputError("cursor-api-key");
+  } else if (auth === "api-key") {
+    credential = argv.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    if (!credential) throw new MissingInputError("api-key");
+    credential = validateApiKey(credential);
+  } else {
+    credential = argv.oauthToken ?? process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (!credential) throw new MissingInputError("oauth-token");
+  }
 
   return {
-    provider: "claude",
+    provider,
     auth,
     mode,
     severity,
-    credential: auth === "api-key" ? validateApiKey(credential) : credential,
+    credential,
     nonInteractive: true,
     commit: argv.commit ?? false,
     push: argv.push ?? false,
+    writeCodeowners: Boolean(argv.codeowners) && !argv.noCodeowners,
+    codeownersUser: argv.codeowners,
+    noKeychain: Boolean(argv.noKeychain),
   };
 }
 
@@ -104,7 +116,7 @@ async function promptForInitOptions(): Promise<InitOptions> {
   const category = (await p.select({
     message: "Agent or Model?",
     options: [
-      { value: "Agent", label: "Agent — I have a Claude subscription (Pro/Max/Team/Enterprise)" },
+      { value: "Agent", label: "Agent — subscription / login tools (Claude Code, Cursor)" },
       { value: "Model", label: "Model — I have an Anthropic Console API key" },
     ],
   })) as PromptCategory;
@@ -113,7 +125,7 @@ async function promptForInitOptions(): Promise<InitOptions> {
     process.exit(1);
   }
 
-  const providers = listProvidersForCategory([claudeProvider], category);
+  const providers = listProvidersForCategory(providerRegistry, category);
   const providerId = (await p.select({
     message: "Pick a provider",
     options: providers.map((pr) => ({ value: pr.id, label: pr.displayName })),
@@ -123,24 +135,25 @@ async function promptForInitOptions(): Promise<InitOptions> {
     process.exit(1);
   }
 
+  const provider = (providerId === "cursor" ? "cursor" : "claude") as ProviderId;
   const auth: AuthType = category === "Agent" ? "subscription" : "api-key";
 
-  const cached = readCachedCredential();
+  const cached = loadPersistedCredential(provider, auth);
   let credential: string;
-  if (cached && cached.auth === auth) {
+  if (cached) {
     const reuse = await p.confirm({ message: "Reuse cached credential from a previous install?" });
     if (!p.isCancel(reuse) && reuse) {
       credential = cached.value;
     } else {
-      credential = await acquireCredential(auth);
+      credential = await acquireCredential(provider, auth);
     }
   } else {
-    credential = await acquireCredential(auth);
+    credential = await acquireCredential(provider, auth);
   }
 
   const cacheIt = await p.confirm({ message: "Cache this credential locally for reuse in other repos?" });
   if (!p.isCancel(cacheIt) && cacheIt) {
-    writeCachedCredential({ auth, value: credential });
+    persistCachedCredential(provider, auth, credential);
   }
 
   for (const dep of requiredDependenciesFor(auth)) {
@@ -164,7 +177,17 @@ async function promptForInitOptions(): Promise<InitOptions> {
     if (!p.isCancel(loginNeeded) && loginNeeded) runGhAuthLogin();
   }
 
-  if (auth === "subscription") {
+  if (provider === "cursor") {
+    p.note(
+      [
+        "Key is billed to your Cursor plan (personal or team service account).",
+        "Every repo admin can trigger reviews against this personal credential.",
+        "On public repos, fork_policy: auto (the default) reviews every fork PR and shares this quota.",
+        "Rotate with `npx revieweragent rotate-secret`.",
+      ].join("\n"),
+      "Before continuing",
+    );
+  } else if (auth === "subscription") {
     p.note(
       [
         "Token lasts ~1 year. Quota is shared with your interactive Claude Code / claude.ai sessions.",
@@ -204,6 +227,11 @@ async function promptForInitOptions(): Promise<InitOptions> {
     if (!p.isCancel(sev)) severity = sev;
   }
 
+  const writeCo = await p.confirm({
+    message: "Write a managed CODEOWNERS block for revieweragent files?",
+    initialValue: true,
+  });
+
   const commit = await p.confirm({ message: "Commit the generated files now?", initialValue: false });
   const doCommit = !p.isCancel(commit) && commit;
   let doPush = false;
@@ -213,7 +241,7 @@ async function promptForInitOptions(): Promise<InitOptions> {
   }
 
   return {
-    provider: "claude",
+    provider,
     auth,
     mode,
     severity,
@@ -221,10 +249,21 @@ async function promptForInitOptions(): Promise<InitOptions> {
     nonInteractive: false,
     commit: doCommit,
     push: doPush,
+    writeCodeowners: !p.isCancel(writeCo) && Boolean(writeCo),
   };
 }
 
-async function acquireCredential(auth: AuthType): Promise<string> {
+async function acquireCredential(provider: ProviderId, auth: AuthType): Promise<string> {
+  if (provider === "cursor") {
+    const key = await p.password({ message: "Paste your Cursor Dashboard / service-account API key" });
+    if (p.isCancel(key)) {
+      p.cancel("Cancelled.");
+      process.exit(1);
+    }
+    const trimmed = key.trim();
+    if (trimmed.length < 8) throw new Error("Cursor API key looks empty.");
+    return trimmed;
+  }
   if (auth === "subscription") {
     const spinner = p.spinner();
     spinner.start("Waiting for browser login (claude setup-token)...");
@@ -260,7 +299,7 @@ export async function runInit(options: InitOptions): Promise<void> {
   const { owner, repo } = parseOwnerRepo(getGitRemoteUrl());
 
   const shas = loadPinnedShas();
-  const workflowYaml = buildWorkflowYaml({ auth: options.auth, shas });
+  const workflowYaml = buildWorkflowYaml({ auth: options.auth, provider: options.provider, shas });
   const existingWorkflow = existsSync(WORKFLOW_PATH) ? readFileSync(WORKFLOW_PATH, "utf8") : undefined;
   if (existingWorkflow !== undefined && isManagedWorkflow(existingWorkflow) && !options.nonInteractive) {
     const ok = await p.confirm({ message: "Overwrite existing .github/workflows/revieweragent.yml?" });
@@ -271,6 +310,7 @@ export async function runInit(options: InitOptions): Promise<void> {
   const workflowResult = resolveWorkflowWrite(WORKFLOW_PATH, existingWorkflow, workflowYaml);
 
   const config: RevieweragentConfig = defaultConfig({
+    provider: options.provider,
     auth: options.auth,
     mode: options.mode,
     block_severity: options.severity,
@@ -285,46 +325,61 @@ export async function runInit(options: InitOptions): Promise<void> {
   const configResult = resolveConfigWrite(CONFIG_PATH, existingConfig, config, true);
 
   const secrets = createGitHubSecretsPort(octokit, owner, repo);
-  const otherAuth: AuthType = options.auth === "api-key" ? "subscription" : "api-key";
-  const otherSecretName =
-    otherAuth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
-  const hasOther = await secrets.hasSecret(otherSecretName);
+  const unused = unusedSecretNames(options.provider, options.auth);
+  const presentUnused: string[] = [];
+  for (const name of unused) {
+    if (await secrets.hasSecret(name)) presentUnused.push(name);
+  }
   let deleteConfirmed = options.nonInteractive;
-  if (hasOther && !options.nonInteractive) {
+  if (presentUnused.length > 0 && !options.nonInteractive) {
     const ok = await p.confirm({
-      message: `Delete unused secret ${otherSecretName}? Only one auth secret can be live per repo.`,
+      message: `Delete unused secret(s) ${presentUnused.join(", ")}? Only one credential can be live per repo.`,
     });
     deleteConfirmed = !p.isCancel(ok) && Boolean(ok);
   }
-  const deletion = decideOtherSecretDeletion({ hasOtherSecret: hasOther, confirmed: deleteConfirmed });
+  const deletion = decideOtherSecretDeletion({ hasOtherSecret: presentUnused.length > 0, confirmed: deleteConfirmed });
   if (deletion === "abort") {
     throw new Error(
-      `Refusing to leave ${otherSecretName} in place. Confirm deletion or remove it manually, then re-run init.`,
+      `Refusing to leave ${presentUnused.join(", ")} in place. Confirm deletion or remove them manually, then re-run init.`,
     );
   }
 
-  const secretName =
-    options.auth === "api-key" ? "REVIEWERAGENT_ANTHROPIC_API_KEY" : "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN";
-  // Write the new secret before touching files so a later write failure still
-  // leaves the currently-checked-in workflow pointing at a live credential.
-  // Delete the unused secret only after the new files are on disk.
+  const secretName = secretNameFor(options.provider, options.auth);
   await secrets.putSecret(secretName, options.credential);
 
   writeFile(WORKFLOW_PATH, workflowResult.content);
   writeFile(CONFIG_PATH, configResult.content);
 
   if (deletion === "delete") {
-    await secrets.deleteSecret(otherSecretName);
+    for (const name of presentUnused) await secrets.deleteSecret(name);
   }
 
   const { data: user } = await octokit.users.getAuthenticated();
-  printCodeownersRecommendation(user.login);
+  const codeownersUser = options.codeownersUser ?? user.login;
+  const pathsToCommit = [WORKFLOW_PATH, CONFIG_PATH];
+  if (options.writeCodeowners) {
+    const codeownersPath = existsSync("CODEOWNERS")
+      ? "CODEOWNERS"
+      : existsSync("docs/CODEOWNERS")
+        ? "docs/CODEOWNERS"
+        : ".github/CODEOWNERS";
+    const existing = existsSync(codeownersPath) ? readFileSync(codeownersPath, "utf8") : undefined;
+    const written = applyManagedCodeowners(existing, codeownersUser);
+    writeFile(codeownersPath, written.content);
+    pathsToCommit.push(codeownersPath);
+    printCodeownersRecommendation(codeownersUser);
+  } else {
+    printCodeownersRecommendation(codeownersUser);
+  }
   if (options.mode === "gate") {
     printBranchProtectionInstructions(owner, repo);
   }
+  console.log(
+    "\nIf this repo uses a merge queue, a dirty or unmapped merge commit still costs one extra model inference.",
+  );
 
   if (options.commit) {
-    commitAndMaybePush([WORKFLOW_PATH, CONFIG_PATH], options.push);
+    commitAndMaybePush(pathsToCommit, options.push);
   } else {
     console.log("\nNext: commit and push these files to your default branch to activate the workflow.");
   }
@@ -343,8 +398,12 @@ export async function init(args: {
   severity?: string;
   oauthToken?: string;
   apiKey?: string;
+  cursorApiKey?: string;
   commit?: boolean;
   push?: boolean;
+  codeowners?: string;
+  noCodeowners?: boolean;
+  noKeychain?: boolean;
 }): Promise<number> {
   try {
     if (!checkGitRepo().present) {

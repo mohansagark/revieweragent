@@ -39,4 +39,29 @@ describe("resolveEventContext", () => {
     expect(ctx.isFork).toBe(true);
     expect(ctx.prAuthorLogin).toBe("outsider");
   });
+
+  it("maps a merge_group head_ref to the PR number", async () => {
+    process.env.GITHUB_EVENT_NAME = "merge_group";
+    process.env.GITHUB_EVENT_PATH = `${FIXTURES}/merge_group.mapped.json`;
+    const octokit = {
+      pulls: {
+        get: async () => ({
+          data: {
+            number: 42,
+            title: "Add widgets",
+            body: "Please review",
+            draft: false,
+            user: { login: "alice" },
+            head: { sha: "headsha1", repo: { full_name: "acme/widgets" } },
+            base: { sha: "basesha1", repo: { full_name: "acme/widgets" } },
+          },
+        }),
+      },
+    } as unknown as Octokit;
+    const ctx = await resolveEventContext(octokit, "acme", "widgets");
+    expect(ctx.eventName).toBe("merge_group");
+    expect(ctx.prNumber).toBe(42);
+    expect(ctx.headSha).toBe("mgheadsha");
+    expect(ctx.baseSha).toBe("mgbasesha");
+  });
 });

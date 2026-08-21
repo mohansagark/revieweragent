@@ -5,7 +5,7 @@ import { buildWorkflowYaml, JOB_NAME, WORKFLOW_JOB_ID } from "../../src/cli/writ
 
 // Validates the generated workflow against
 // specs/001-v1-core-commands/contracts/action-interface.md's required
-// shape: locked check name, permissions, no merge_group, exactly one
+// shape: locked check name, permissions, merge_group, exactly one
 // credential env var, base-only checkout.
 
 describe("action-interface contract", () => {
@@ -53,12 +53,12 @@ describe("action-interface contract", () => {
 
   it("sets run-name to the PR head SHA so fork actor-cap counting works when pull_requests is empty", () => {
     expect(yaml).toMatch(
-      /run-name:\s*revieweragent \$\{\{\s*github\.event\.pull_request\.head\.sha \|\| github\.sha\s*\}\}/,
+      /run-name:\s*revieweragent \$\{\{\s*github\.event\.pull_request\.head\.sha \|\| github\.event\.merge_group\.head_sha \|\| github\.sha\s*\}\}/,
     );
   });
 
-  it("does not include merge_group in v1's on: block", () => {
-    expect(doc.on.merge_group).toBeUndefined();
+  it("includes merge_group in v2's on: block and never mix pull_request", () => {
+    expect(doc.on.merge_group).toBeDefined();
     expect(doc.on.pull_request_target).toBeDefined();
     expect(doc.on.issue_comment).toBeDefined();
     expect(doc.on.pull_request).toBeUndefined();

@@ -2,11 +2,6 @@ import { minimatch } from "minimatch";
 import type { Octokit } from "@octokit/rest";
 import type { RevieweragentConfig } from "./config-schema.js";
 
-// SPEC.md §8 step 6: fetch PR files as data, apply `exclude` globs, sum
-// remaining `changes`. Gate mode always BLOCKs over-limit (on_limit is
-// ignored — over-limit is not a backdoor around the gate). Advisory mode
-// respects `on_limit`.
-
 export interface PrFile {
   filename: string;
   changes: number;
@@ -31,6 +26,21 @@ export async function fetchPrFiles(
     }
   }
   return files;
+}
+
+export async function fetchCompareFiles(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  headSha: string,
+): Promise<PrFile[]> {
+  const { data } = await octokit.repos.compareCommits({ owner, repo, base: baseSha, head: headSha });
+  return (data.files ?? []).map((f) => ({
+    filename: f.filename,
+    changes: f.changes,
+    patch: f.patch,
+  }));
 }
 
 export function filterExcluded(files: PrFile[], excludeGlobs: string[]): PrFile[] {

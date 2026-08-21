@@ -8,8 +8,9 @@ enough — no extra bot, no per-PR command.
 npx revieweragent init
 ```
 
-v1 supports **Claude subscription** (Claude Code OAuth token from `claude setup-token`)
-and **Anthropic API key**. Subscription is the default.
+Supports **Claude subscription** (Claude Code OAuth token from `claude setup-token`),
+**Anthropic API key**, and **Cursor** (Dashboard / service-account API key, Agent
+ask-mode). Claude subscription is the default.
 
 Marketing copy for a future public launch lives in [`RELEASE_NOTES.md`](./RELEASE_NOTES.md).
 That file is a living list, not a promise that we have launched.
@@ -18,8 +19,10 @@ That file is a living list, not a promise that we have launched.
 
 - Node.js 20+
 - GitHub CLI (`gh`) authenticated to the repo you want to install into
-- For subscription mode: Claude Code CLI, with `claude setup-token` already run
-- For api-key mode: an Anthropic API key
+- For Claude subscription: Claude Code CLI, with `claude setup-token` already run
+- For Claude api-key: an Anthropic API key
+- For Cursor: a Cursor Dashboard or team service-account API key. Init does not
+  install the `agent` CLI; CI downloads a checksum-pinned tarball.
 
 The installer talks to the GitHub API with `gh auth token`. Run `init` from a git
 checkout whose `origin` is the target GitHub repository.
@@ -35,7 +38,10 @@ That writes:
 
 - `.revieweragent.yml` — repo config (commit this)
 - `.github/workflows/revieweragent.yml` — the review workflow (committed)
-- A GitHub Actions secret (`REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` or `REVIEWERAGENT_ANTHROPIC_API_KEY`)
+- A GitHub Actions secret (`REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`,
+  `REVIEWERAGENT_ANTHROPIC_API_KEY`, or `REVIEWERAGENT_CURSOR_API_KEY`)
+- A managed `CODEOWNERS` block when you pass `--codeowners @USER` (skipped by
+  default in non-interactive mode)
 
 Then commit and push those files. Later PRs get a review automatically.
 
@@ -43,16 +49,24 @@ Then commit and push those files. Later PRs get a review automatically.
 
 ### Auth
 
-`init` tries subscription first (`claude setup-token` output). Pass `--auth api-key`
-to use `ANTHROPIC_API_KEY` instead.
+`init` tries Claude subscription first (`claude setup-token` output). Pass `--auth api-key`
+to use `ANTHROPIC_API_KEY`, or `--provider cursor --auth subscription --cursor-api-key …`
+for Cursor. Cursor has no Model / Console API-key path.
 
 ### Advisory vs gate
 
 `--mode advisory` (default) posts the review and always concludes the check success.
 
 `--mode gate` still posts the review, then concludes the GitHub Check **`revieweragent`**
-as failure when findings at `block_severity` or higher are present. Wire that check
-name into branch protection yourself — v1 does not apply protection rules.
+as failure when findings at `block_severity` or higher are present. After the workflow
+has run at least once on the default branch, require that check with:
+
+```bash
+npx revieweragent apply-protection
+```
+
+That command read-modify-writes classic branch protection and verifies the GET.
+It will not invent a ruleset from scratch.
 
 ### Forks
 
@@ -60,13 +74,28 @@ Default `fork_policy` is `auto`: PRs from forks are reviewed, with a per-actor h
 cap. The other value is `comment-gated` (only a write-access `/review` on a fork PR).
 There is no `--fork-policy off|on` flag — edit `.revieweragent.yml`.
 
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `init` | Install (also the default for a bare `npx revieweragent`) |
+| `upgrade` | Refresh pinned action SHAs; does not change provider, auth, or mode |
+| `rotate-secret` | PUT a new credential to the matching Actions secret |
+| `apply-protection` | Add the `revieweragent` required check (RMW + verify) |
+| `uninstall` | Remove managed files (and optionally the secret / local cache) |
+
+Local credentials prefer the OS keychain (macOS Keychain / libsecret) and fall
+back to `~/.config/revieweragent/credentials.json` (`0600`). Pass `--no-keychain`
+to force the file.
+
 ## Uninstall
 
 ```bash
 npx revieweragent uninstall
 ```
 
-Removes the workflow, local config, and the GitHub secret this installer created.
+Removes the workflow, local config, the managed CODEOWNERS block, and optionally
+the GitHub secret this installer created.
 
 ## Review runs in GitHub Actions only
 
@@ -78,24 +107,28 @@ Each review attempt posts start and complete timeline comments with
 `Verdict: PASS | BLOCK | SKIPPED | FAILED`. Those comments are not the merge
 gate — the GitHub Check named `revieweragent` is.
 
-## What v1 does not do
+Merge-queue (`merge_group`) reuses a prior PASS when the PR mapping and base SHA
+still match; otherwise it runs one extra inference on the merge commit.
 
-These are **v2** (already specified) unless noted:
+## What this release does not do
 
-- Does not apply branch protection or merge-queue rules (`apply-protection`, `merge_group`)
-- Does not write `CODEOWNERS` (it prints a snippet you can paste)
-- Does not ship `upgrade`, `rotate-secret`, or `apply-protection`
-- Does not offer Cursor (v2; Dashboard API key, not Copilot) or other git hosts / Copilot / OpenAI / Gemini (v3)
+These are **v3** (undesigned) unless noted:
+
+- Does not support GitLab, Bitbucket, Azure DevOps, or GitHub Enterprise Server
+- Does not offer Copilot, OpenAI, or Gemini
+- Does not invent a branch-protection ruleset when classic protection is missing
+  (`apply-protection` prints instructions instead)
 
 ## Upgrade
 
-Already installed `1.0.0`? Re-run init to refresh the workflow pin (progress comments, verdicts, and `issues: write` live in the action SHA, not in the npm CLI alone):
+Already installed? Refresh pins without changing provider or auth:
 
 ```bash
-npx revieweragent@1.1.0 init
+npx revieweragent upgrade
 ```
 
-Init confirms before overwriting a managed workflow. It writes the GitHub secret for the auth you select (same as first install). Commit the workflow change.
+Commit the workflow change. Re-running `init` still works and overwrites the
+secret for the auth you select.
 
 ## License
 

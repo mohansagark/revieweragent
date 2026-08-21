@@ -1,23 +1,30 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import * as p from "@clack/prompts";
 import { createGitHubClient, parseOwnerRepo, resolveGitHubToken } from "../platform/github/client.js";
 import { createGitHubSecretsPort } from "../platform/github/secrets.js";
-import { parseConfig, type AuthType } from "../core/config-schema.js";
+import { parseConfig, type AuthType, type ProviderId } from "../core/config-schema.js";
 import { getGitRemoteUrl } from "../core/git.js";
 import { deleteManagedFiles } from "./delete-managed-files.js";
 import { deleteRepoSecret } from "./delete-secret.js";
 import { deleteLocalCredentials } from "./delete-local-credentials.js";
 import { printUninstallProtectionWarning, printCommitReminder } from "./print-uninstall-warning.js";
+import { removeManagedCodeowners } from "./codeowners.js";
 
 const CONFIG_PATH = ".revieweragent.yml";
 
 /** Best-effort auth lookup. Uninstall must still remove managed files if config is corrupt. */
-export function readAuthFromConfigRaw(raw: string): AuthType | undefined {
+export function readInstallFromConfigRaw(raw: string): { auth: AuthType; provider: ProviderId } | undefined {
   try {
-    return parseConfig(raw).auth;
+    const config = parseConfig(raw);
+    return { auth: config.auth, provider: config.provider };
   } catch {
     return undefined;
   }
+}
+
+/** @deprecated use readInstallFromConfigRaw */
+export function readAuthFromConfigRaw(raw: string): AuthType | undefined {
+  return readInstallFromConfigRaw(raw)?.auth;
 }
 
 export class RefusedWithoutConsentError extends Error {
@@ -45,7 +52,9 @@ export async function runUninstall(options: UninstallOptions): Promise<void> {
     throw new RefusedWithoutConsentError();
   }
 
-  const auth = existsSync(CONFIG_PATH) ? readAuthFromConfigRaw(readFileSync(CONFIG_PATH, "utf8")) : undefined;
+  const install = existsSync(CONFIG_PATH) ? readInstallFromConfigRaw(readFileSync(CONFIG_PATH, "utf8")) : undefined;
+  const auth = install?.auth;
+  const provider = install?.provider ?? "claude";
   if (existsSync(CONFIG_PATH) && !auth) {
     console.log("Could not parse .revieweragent.yml; leaving repo secrets in place.");
   }
@@ -73,7 +82,7 @@ export async function runUninstall(options: UninstallOptions): Promise<void> {
       wantsSecretDeletion = !p.isCancel(answer) && answer;
     }
     const secrets = createGitHubSecretsPort(octokit, owner, repo);
-    const secretDeleted = await deleteRepoSecret(secrets, auth, wantsSecretDeletion);
+    const secretDeleted = await deleteRepoSecret(secrets, auth, wantsSecretDeletion, provider);
     console.log(secretDeleted ? "Repo secret deleted." : "Repo secret left in place.");
   }
 
@@ -86,6 +95,18 @@ export async function runUninstall(options: UninstallOptions): Promise<void> {
   }
   const credentialsDeleted = deleteLocalCredentials(wantsCredentialDeletion);
   console.log(credentialsDeleted ? "Local credential cache deleted." : "Local credential cache left in place.");
+
+  for (const path of [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]) {
+    if (!existsSync(path)) continue;
+    const result = removeManagedCodeowners(readFileSync(path, "utf8"));
+    if (result.action === "delete") {
+      unlinkSync(path);
+      console.log(`Removed managed CODEOWNERS block (${path} deleted).`);
+    } else if (result.action === "update") {
+      writeFileSync(path, result.content);
+      console.log(`Removed managed CODEOWNERS block from ${path}.`);
+    }
+  }
 
   printUninstallProtectionWarning(owner, repo);
   printCommitReminder();

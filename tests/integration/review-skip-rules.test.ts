@@ -132,4 +132,15 @@ describe("decideSkip", () => {
     const decision = await decideSkip(octokit, "acme", "widgets", commentCtx, defaultConfig());
     expect(decision).toEqual({ skip: true, reason: expect.stringContaining("write") });
   });
+
+  it("does not skip merge_group events", async () => {
+    const octokit = mockOctokit("write");
+    const mergeCtx: EventContext = {
+      ...baseCtx,
+      eventName: "merge_group",
+      action: "checks_requested",
+    };
+    const decision = await decideSkip(octokit, "acme", "widgets", mergeCtx, defaultConfig());
+    expect(decision).toEqual({ skip: false });
+  });
 });

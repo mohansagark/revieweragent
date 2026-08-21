@@ -47,6 +47,10 @@ export async function decideSkip(
     return { skip: false };
   }
 
+  if (ctx.eventName === "merge_group") {
+    return { skip: false };
+  }
+
   // issue_comment
   if (!ctx.commentBody?.includes(config.trigger_phrase)) {
     return { skip: true, reason: "comment lacks trigger phrase" };

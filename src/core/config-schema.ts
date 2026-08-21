@@ -6,6 +6,7 @@ import { parseDocument, Document } from "yaml";
 
 export const CONFIG_SCHEMA_VERSION = 1;
 
+export type ProviderId = "claude" | "cursor";
 export type AuthType = "subscription" | "api-key";
 export type Mode = "advisory" | "gate";
 export type Severity = "critical" | "high" | "medium" | "low" | "note";
@@ -22,7 +23,7 @@ export type OnLimit = "skip" | "block";
 
 export interface RevieweragentConfig {
   version: number;
-  provider: "claude";
+  provider: ProviderId;
   auth: AuthType;
   mode: Mode;
   block_severity: BlockSeverity;
@@ -116,11 +117,14 @@ export function parseConfig(raw: string): RevieweragentConfig {
 }
 
 function validateConfig(config: RevieweragentConfig): void {
-  if (config.provider !== "claude") {
+  if (config.provider !== "claude" && config.provider !== "cursor") {
     throw new InvalidConfigError(`unsupported provider "${String(config.provider)}"`);
   }
   if (config.auth !== "subscription" && config.auth !== "api-key") {
     throw new InvalidConfigError(`unsupported auth "${String(config.auth)}"`);
+  }
+  if (config.provider === "cursor" && config.auth !== "subscription") {
+    throw new InvalidConfigError('provider "cursor" only supports auth: subscription');
   }
   if (config.mode !== "advisory" && config.mode !== "gate") {
     throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);

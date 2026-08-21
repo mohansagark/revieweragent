@@ -77,4 +77,20 @@ describe("publishCheckAndReview", () => {
     expect(reviews.updateReview).toHaveBeenCalledWith(99, 7, "abc", "updated");
     expect(reviews.createReview).not.toHaveBeenCalled();
   });
+
+  it("skips the Reviews API when there is no PR number (unmapped merge_group)", async () => {
+    const { checks, reviews } = fakePorts();
+    const exit = await publishCheckAndReview({
+      checks,
+      reviews,
+      headSha: "merge-sha",
+      kind: "PASS",
+      mode: "gate",
+      summary: "looks good",
+    });
+    expect(exit).toBe(0);
+    expect(reviews.createReview).not.toHaveBeenCalled();
+    expect(reviews.findExistingReview).not.toHaveBeenCalled();
+    expect(checks.upsertCheck).toHaveBeenCalledWith("merge-sha", "success", "PASS", "looks good");
+  });
 });
