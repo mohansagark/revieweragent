@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createFakeGithub, type FakeGithub } from "../helpers/fake-octokit.js";
-import { createTempGitRepo } from "../helpers/temp-git-repo.js";
+import { createTempGitRepo, type TempGitRepo } from "../helpers/temp-git-repo.js";
 
 const githubState = vi.hoisted(() => ({
   current: undefined as FakeGithub | undefined,
 }));
 
 vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/platform/github/client.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/platform/github/client.js");
   return {
     ...actual,
     createGitHubClient: () => githubState.current!.octokit,
@@ -23,7 +23,7 @@ import { MANAGED_MARKER } from "../../src/core/config-schema.js";
 
 describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
   const originalCwd = process.cwd();
-  let repo: ReturnType<typeof createTempGitRepo>;
+  let repo: TempGitRepo;
 
   async function setup() {
     githubState.current = await createFakeGithub();
@@ -50,6 +50,7 @@ describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
       nonInteractive: true,
       commit: false,
       push: false,
+      writeCodeowners: false,
     });
 
     const workflow = readFileSync(join(repo.dir, ".github/workflows/revieweragent.yml"), "utf8");
@@ -76,6 +77,7 @@ describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
       nonInteractive: true,
       commit: false,
       push: false,
+      writeCodeowners: false,
     });
     expect(github.calls.putSecret.map((s) => s.secret_name)).toEqual(["REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN"]);
     const workflow = readFileSync(join(repo.dir, ".github/workflows/revieweragent.yml"), "utf8");
@@ -103,6 +105,7 @@ describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
       nonInteractive: true,
       commit: false,
       push: false,
+      writeCodeowners: false,
     });
 
     expect(github.calls.putSecret.map((s) => s.secret_name)).toEqual(["REVIEWERAGENT_ANTHROPIC_API_KEY"]);
@@ -128,6 +131,7 @@ describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
         nonInteractive: true,
         commit: false,
         push: false,
+        writeCodeowners: false,
       }),
     ).rejects.toMatchObject({ name: "UnmanagedConfigConflictError" });
     expect(github.calls.putSecret).toHaveLength(0);
@@ -148,8 +152,52 @@ describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
         nonInteractive: true,
         commit: false,
         push: false,
+        writeCodeowners: false,
       }),
     ).rejects.toMatchObject({ name: "UnmarkedWorkflowConflictError" });
     expect(github.calls.putSecret).toHaveLength(0);
+  });
+
+  it("writes Cursor subscription secret and tarball install, not Claude env", async () => {
+    const github = await setup();
+    await runInit({
+      provider: "cursor",
+      auth: "subscription",
+      mode: "advisory",
+      severity: "high",
+      credential: "cursor-key-not-real",
+      nonInteractive: true,
+      commit: false,
+      push: false,
+      writeCodeowners: false,
+    });
+    expect(github.calls.putSecret.map((s) => s.secret_name)).toEqual(["REVIEWERAGENT_CURSOR_API_KEY"]);
+    const workflow = readFileSync(join(repo.dir, ".github/workflows/revieweragent.yml"), "utf8");
+    expect(workflow).toContain("CURSOR_API_KEY");
+    expect(workflow).toContain("agent-cli-package.tar.gz");
+    expect(workflow).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(workflow).not.toContain("ANTHROPIC_API_KEY");
+    const config = readFileSync(join(repo.dir, ".revieweragent.yml"), "utf8");
+    expect(config).toContain("provider: cursor");
+  });
+
+  it("writes a managed CODEOWNERS block when asked", async () => {
+    await setup();
+    await runInit({
+      provider: "claude",
+      auth: "api-key",
+      mode: "advisory",
+      severity: "high",
+      credential: "test-api-key-not-real",
+      nonInteractive: true,
+      commit: false,
+      push: false,
+      writeCodeowners: true,
+      codeownersUser: "alice",
+    });
+    const codeowners = readFileSync(join(repo.dir, ".github/CODEOWNERS"), "utf8");
+    expect(codeowners).toContain("# revieweragent:start");
+    expect(codeowners).toContain("@alice");
+    expect(codeowners).toContain("# revieweragent:end");
   });
 });

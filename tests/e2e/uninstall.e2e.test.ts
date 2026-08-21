@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createFakeGithub, type FakeGithub } from "../helpers/fake-octokit.js";
-import { createTempGitRepo } from "../helpers/temp-git-repo.js";
+import { createTempGitRepo, type TempGitRepo } from "../helpers/temp-git-repo.js";
 import { serializeConfig, defaultConfig, MANAGED_HEADER } from "../../src/core/config-schema.js";
 import { WORKFLOW_MANAGED_HEADER } from "../../src/cli/write-workflow.js";
 
@@ -11,7 +11,7 @@ const githubState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/platform/github/client.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/platform/github/client.js");
   return {
     ...actual,
     createGitHubClient: () => githubState.current!.octokit,
@@ -23,7 +23,7 @@ import { runUninstall, uninstall, RefusedWithoutConsentError } from "../../src/c
 
 describe("uninstall e2e (temp git repo + fake GitHub)", () => {
   const originalCwd = process.cwd();
-  let repo: ReturnType<typeof createTempGitRepo>;
+  let repo: TempGitRepo;
 
   async function setup(opts?: { configRaw?: string; workflowRaw?: string; seedSecret?: string }) {
     githubState.current = await createFakeGithub();
@@ -128,8 +128,27 @@ describe("uninstall e2e (temp git repo + fake GitHub)", () => {
 
   it("uninstall() maps refused-without-consent to exit 1", async () => {
     await setup();
-    await expect(
-      uninstall({ nonInteractive: true, yes: false }),
-    ).resolves.toBe(1);
+    await expect(uninstall({ nonInteractive: true, yes: false })).resolves.toBe(1);
+  });
+
+  it("removes only the managed CODEOWNERS block", async () => {
+    await setup();
+    mkdirSync(join(repo.dir, ".github"), { recursive: true });
+    writeFileSync(
+      join(repo.dir, ".github/CODEOWNERS"),
+      ["* @maintainers", "", "# revieweragent:start", ".revieweragent.yml  @alice", "# revieweragent:end", "", "docs/ @docs"].join(
+        "\n",
+      ) + "\n",
+    );
+    await runUninstall({
+      nonInteractive: true,
+      yes: true,
+      deleteSecret: false,
+      deleteLocalCredentials: false,
+    });
+    const remaining = readFileSync(join(repo.dir, ".github/CODEOWNERS"), "utf8");
+    expect(remaining).toContain("* @maintainers");
+    expect(remaining).toContain("docs/ @docs");
+    expect(remaining).not.toContain("revieweragent:start");
   });
 });

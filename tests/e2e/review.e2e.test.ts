@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createFakeGithub, type FakeGithub } from "../helpers/fake-octokit.js";
-import { createTempGitRepo, writeEventPayload } from "../helpers/temp-git-repo.js";
-import { serializeConfig, defaultConfig } from "../../src/core/config-schema.js";
+import { createTempGitRepo, writeEventPayload, type TempGitRepo } from "../helpers/temp-git-repo.js";
+import { serializeConfig, defaultConfig, type RevieweragentConfig } from "../../src/core/config-schema.js";
 import { ModelBackendError } from "../../src/provider/claude/subscription.js";
 
 const githubState = vi.hoisted(() => ({
@@ -13,7 +13,7 @@ const githubState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/platform/github/client.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/platform/github/client.js");
   return {
     ...actual,
     createGitHubClient: () => githubState.current!.octokit,
@@ -22,7 +22,7 @@ vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
 });
 
 vi.mock("../../src/provider/claude/subscription.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/provider/claude/subscription.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/provider/claude/subscription.js");
   return {
     ...actual,
     callSubscriptionBackend: (...args: unknown[]) => githubState.subscription(...args),
@@ -30,7 +30,7 @@ vi.mock("../../src/provider/claude/subscription.js", async (importOriginal) => {
 });
 
 vi.mock("../../src/provider/claude/api-key.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/provider/claude/api-key.js")>();
+  const actual = (await importOriginal()) as typeof import("../../src/provider/claude/api-key.js");
   return {
     ...actual,
     callApiKeyBackend: (...args: unknown[]) => githubState.apiKey(...args),
@@ -81,10 +81,10 @@ function forkEvent() {
 describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
   const originalCwd = process.cwd();
   const originalEnv = { ...process.env };
-  let repo: ReturnType<typeof createTempGitRepo>;
+  let repo: TempGitRepo;
 
   async function setup(opts?: {
-    config?: Parameters<typeof defaultConfig>[0];
+    config?: Partial<RevieweragentConfig>;
     event?: unknown;
     eventName?: string;
     extraEnv?: Record<string, string>;
@@ -374,5 +374,87 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     await expect(runReview()).resolves.toBe(0);
     expect(githubState.apiKey).toHaveBeenCalledOnce();
     expect(githubState.subscription).not.toHaveBeenCalled();
+  });
+
+  it("fail-closes when spawn throws E2BIG instead of crashing the job", async () => {
+    const github = await setup({ config: { mode: "gate", auth: "subscription" } });
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-test-token-not-real";
+    githubState.subscription.mockRejectedValue(Object.assign(new Error("spawn E2BIG"), { code: "E2BIG" }));
+    await expect(runReview()).resolves.toBe(1);
+    expect(github.checks[0]?.conclusion).toBe("failure");
+    expect(github.checks[0]?.output?.summary).toMatch(/argument size limit/i);
+  });
+
+  it("reuses a PASS check on merge_group without calling the model or posting comments", async () => {
+    const mergeSha = "cccccccccccccccccccccccccccccccccccccccc";
+    const github = await setup({
+      eventName: "merge_group",
+      config: { auth: "subscription" },
+      event: {
+        merge_group: {
+          head_sha: mergeSha,
+          head_ref: `refs/heads/gh-readonly-queue/main/pr-42-${HEAD}`,
+          base_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+      },
+    });
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-test-token-not-real";
+    github.pullRequests.set(42, {
+      number: 42,
+      title: "Add widgets",
+      body: "",
+      draft: false,
+      user: { login: "alice" },
+      head: { sha: HEAD, repo: { full_name: "acme/widgets" } },
+      base: { sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", repo: { full_name: "acme/widgets" } },
+    });
+    github.checks.push({
+      id: 11,
+      name: "revieweragent",
+      headSha: HEAD,
+      conclusion: "success",
+      output: { title: "PASS" },
+    });
+    await expect(runReview()).resolves.toBe(0);
+    expect(githubState.subscription).not.toHaveBeenCalled();
+    expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
+    expect(github.checks.some((c) => c.headSha === mergeSha && c.conclusion === "success")).toBe(true);
+  });
+
+  it("runs extra inference on merge_group when the PR check was an availability skip", async () => {
+    const mergeSha = "dddddddddddddddddddddddddddddddddddddddd";
+    const github = await setup({
+      eventName: "merge_group",
+      config: { auth: "subscription" },
+      event: {
+        merge_group: {
+          head_sha: mergeSha,
+          head_ref: `refs/heads/gh-readonly-queue/main/pr-42-${HEAD}`,
+          base_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+      },
+    });
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-test-token-not-real";
+    github.pullRequests.set(42, {
+      number: 42,
+      title: "Add widgets",
+      body: "",
+      draft: false,
+      user: { login: "alice" },
+      head: { sha: HEAD, repo: { full_name: "acme/widgets" } },
+      base: { sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", repo: { full_name: "acme/widgets" } },
+    });
+    github.checks.push({
+      id: 12,
+      name: "revieweragent",
+      headSha: HEAD,
+      conclusion: "success",
+      output: { title: "Review skipped: availability-skip" },
+    });
+    await expect(runReview()).resolves.toBe(0);
+    expect(githubState.subscription).toHaveBeenCalledOnce();
+    expect(github.calls.createReview).toHaveLength(1);
+    expect(github.checks.some((c) => c.headSha === mergeSha)).toBe(true);
   });
 });
