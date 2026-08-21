@@ -112,21 +112,14 @@ export function mergeRequiredCheck(existing: ClassicProtection, checkName: strin
     restrictions: sanitizeActorLists(existing.restrictions),
   };
 
-  const linear = asBoolean(existing.required_linear_history);
-  if (linear !== undefined) next.required_linear_history = linear;
-  const forcePushes = asBoolean(existing.allow_force_pushes);
+  next.required_linear_history = asBoolean(existing.required_linear_history) ?? false;
   if (existing.allow_force_pushes === null) next.allow_force_pushes = null;
-  else if (forcePushes !== undefined) next.allow_force_pushes = forcePushes;
-  const deletions = asBoolean(existing.allow_deletions);
-  if (deletions !== undefined) next.allow_deletions = deletions;
-  const blockCreations = asBoolean(existing.block_creations);
-  if (blockCreations !== undefined) next.block_creations = blockCreations;
-  const conversations = asBoolean(existing.required_conversation_resolution);
-  if (conversations !== undefined) next.required_conversation_resolution = conversations;
-  const lockBranch = asBoolean(existing.lock_branch);
-  if (lockBranch !== undefined) next.lock_branch = lockBranch;
-  const forkSync = asBoolean(existing.allow_fork_syncing);
-  if (forkSync !== undefined) next.allow_fork_syncing = forkSync;
+  else next.allow_force_pushes = asBoolean(existing.allow_force_pushes) ?? false;
+  next.allow_deletions = asBoolean(existing.allow_deletions) ?? false;
+  next.block_creations = asBoolean(existing.block_creations) ?? false;
+  next.required_conversation_resolution = asBoolean(existing.required_conversation_resolution) ?? false;
+  next.lock_branch = asBoolean(existing.lock_branch) ?? false;
+  next.allow_fork_syncing = asBoolean(existing.allow_fork_syncing) ?? false;
 
   return next;
 }

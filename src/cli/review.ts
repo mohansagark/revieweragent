@@ -12,7 +12,14 @@ import {
 } from "../core/config-schema.js";
 import { resolveEventContext, UnsupportedEventError } from "./review-event-context.js";
 import { decideSkip } from "./review-skip-rules.js";
-import { fetchPrFiles, fetchCompareFiles, checkLimits, decideLimitOutcome, filterExcluded } from "../core/diff-limits.js";
+import {
+  fetchPrFiles,
+  fetchCompareFiles,
+  checkLimits,
+  decideLimitOutcome,
+  filterExcluded,
+  CompareTruncatedError,
+} from "../core/diff-limits.js";
 import { wrapUntrustedData } from "../core/sanitizer.js";
 import { buildInstructionsPreamble } from "../core/system-prompt.js";
 import { parseFindings, InvalidFindingsError } from "../core/findings-schema.js";
@@ -180,10 +187,20 @@ export async function runReview(): Promise<number> {
     }
   }
 
-  const files =
-    ctx.eventName === "merge_group" || ctx.prNumber === undefined
-      ? await fetchCompareFiles(octokit, owner, repo, ctx.baseSha, ctx.headSha)
-      : await fetchPrFiles(octokit, owner, repo, ctx.prNumber);
+  let files;
+  try {
+    files =
+      ctx.eventName === "merge_group" || ctx.prNumber === undefined
+        ? await fetchCompareFiles(octokit, owner, repo, ctx.baseSha, ctx.headSha)
+        : await fetchPrFiles(octokit, owner, repo, ctx.prNumber);
+  } catch (err) {
+    if (!(err instanceof CompareTruncatedError)) throw err;
+    const truncatedOutcome = decideLimitOutcome(config, true);
+    if (truncatedOutcome.kind === "advisory-skip") {
+      return await publishWithProgress("availability-skip", config.mode, "Diff too large — skipped review.");
+    }
+    return await publishWithProgress("fail-closed-infra", config.mode, "Diff too large — skipped review.");
+  }
   const included = filterExcluded(files, config.exclude);
   const { overLimit } = checkLimits(config, files);
   const limitOutcome = decideLimitOutcome(config, overLimit);

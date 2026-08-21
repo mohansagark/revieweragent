@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { filterExcluded, checkLimits, decideLimitOutcome, type PrFile } from "../../src/core/diff-limits.js";
+import {
+  filterExcluded,
+  checkLimits,
+  decideLimitOutcome,
+  compareResponseIsTruncated,
+  CompareTruncatedError,
+  fetchCompareFiles,
+  type PrFile,
+} from "../../src/core/diff-limits.js";
 import { defaultConfig } from "../../src/core/config-schema.js";
 
 describe("diff limits", () => {
@@ -40,5 +48,28 @@ describe("diff limits", () => {
     const files: PrFile[] = [{ filename: "src/small.ts", changes: 5 }];
     const { overLimit } = checkLimits(config, files);
     expect(decideLimitOutcome(config, overLimit)).toEqual({ kind: "under-limit" });
+  });
+});
+
+describe("compare API truncation (merge_group)", () => {
+  it("treats truncated=true or a 300-file page as truncated", () => {
+    expect(compareResponseIsTruncated({ truncated: true, files: [{ filename: "a.ts" }] })).toBe(true);
+    expect(
+      compareResponseIsTruncated({
+        files: Array.from({ length: 300 }, (_, i) => ({ filename: `${i}.ts` })),
+      }),
+    ).toBe(true);
+    expect(compareResponseIsTruncated({ truncated: false, files: [{ filename: "a.ts" }] })).toBe(false);
+  });
+
+  it("fail-closes fetchCompareFiles when GitHub truncates the file list", async () => {
+    const octokit = {
+      repos: {
+        compareCommits: async () => ({ data: { truncated: true, files: [{ filename: "a.ts", changes: 1 }] } }),
+      },
+    };
+    await expect(fetchCompareFiles(octokit as never, "o", "r", "base", "head")).rejects.toBeInstanceOf(
+      CompareTruncatedError,
+    );
   });
 });

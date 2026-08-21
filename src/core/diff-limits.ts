@@ -8,6 +8,20 @@ export interface PrFile {
   patch?: string;
 }
 
+/** GitHub compare returns at most 300 files; pagination only walks commits. */
+export const COMPARE_FILES_CAP = 300;
+
+export class CompareTruncatedError extends Error {
+  constructor() {
+    super("GitHub compare API truncated the file list");
+    this.name = "CompareTruncatedError";
+  }
+}
+
+export function compareResponseIsTruncated(data: { truncated?: boolean; files?: unknown[] }): boolean {
+  return data.truncated === true || (data.files?.length ?? 0) >= COMPARE_FILES_CAP;
+}
+
 export async function fetchPrFiles(
   octokit: Octokit,
   owner: string,
@@ -36,6 +50,9 @@ export async function fetchCompareFiles(
   headSha: string,
 ): Promise<PrFile[]> {
   const { data } = await octokit.repos.compareCommits({ owner, repo, base: baseSha, head: headSha });
+  if (compareResponseIsTruncated(data)) {
+    throw new CompareTruncatedError();
+  }
   return (data.files ?? []).map((f) => ({
     filename: f.filename,
     changes: f.changes,
