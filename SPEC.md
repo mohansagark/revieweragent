@@ -1,7 +1,7 @@
 # revieweragent — Design Spec
 
 Interactive CLI (`npx revieweragent`) that wires automatic AI PR reviews into a
-git repo. Published to npm as `revieweragent` (`1.0.0`).
+git repo. Published to npm as `revieweragent` (`1.1.0`).
 
 Status: **v1 implemented and verified end-to-end against a real repo
 (2026-08-19)** — `init`, `review` (subscription auth, gate mode), and the
