@@ -78,6 +78,16 @@ Same engine as CI. Needs the same GitHub token and Claude/Anthropic credentials.
 - Does not write `CODEOWNERS` (it prints a snippet you can paste)
 - Does not ship `upgrade`, `rotate-secret`, or `apply-protection`
 
+## Upgrade
+
+Already installed `1.0.0`? Re-run init to refresh the workflow pin (progress comments, verdicts, and `issues: write` live in the action SHA, not in the npm CLI alone):
+
+```bash
+npx revieweragent@1.1.0 init
+```
+
+That overwrites `.github/workflows/revieweragent.yml` and the GitHub secret. Commit the workflow change.
+
 ## License
 
 MIT
