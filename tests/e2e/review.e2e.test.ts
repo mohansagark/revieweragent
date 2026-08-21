@@ -132,8 +132,9 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     expect(github.calls.createCheck).toHaveLength(1);
     expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
       "🔍 **Review starting**",
-      "✅ **Review completed**",
+      "✅ **Review completed**\n\n**Verdict: PASS**\n\nLooks good",
     ]);
+    expect((github.calls.createReview[0] as { body: string }).body).toContain("**Verdict: PASS**");
     expect(github.checks[0]?.conclusion).toBe("success");
     expect(github.checks[0]?.headSha).toBe(HEAD);
   });
@@ -146,7 +147,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     expect(github.checks[0]?.conclusion).toBe("failure");
     expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
       "🔍 **Review starting**",
-      "⚠️ **Review completed** — findings posted on the diff.",
+      "⚠️ **Review completed**\n\n**Verdict: BLOCK**\n\nSQL injection",
     ]);
     const review = github.calls.createReview[0] as { comments?: unknown[] };
     expect(review.comments?.length).toBeGreaterThan(0);
@@ -349,7 +350,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     expect(github.checks[0]?.headSha).toBe(HEAD);
     expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
       "🔍 **Review starting**",
-      "⚠️ **Review completed** — findings posted on the diff.",
+      "❌ **Review completed**\n\n**Verdict: FAILED**\n\nValidation Failed: line not part of the diff",
     ]);
   });
 

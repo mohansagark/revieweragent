@@ -13614,11 +13614,40 @@ async function publishCheckAndReview(opts) {
 
 // src/cli/review-progress.ts
 var REVIEW_START_COMMENT = "\u{1F50D} **Review starting**";
-function formatReviewCompleteComment(conclusion) {
-  if (conclusion === "failure") {
-    return "\u26A0\uFE0F **Review completed** \u2014 findings posted on the diff.";
+var VERDICT_EMOJI = {
+  PASS: "\u2705",
+  BLOCK: "\u26A0\uFE0F",
+  SKIPPED: "\u2139\uFE0F",
+  FAILED: "\u274C"
+};
+function verdictFor(kind) {
+  switch (kind) {
+    case "PASS":
+      return "PASS";
+    case "BLOCK":
+      return "BLOCK";
+    case "availability-skip":
+      return "SKIPPED";
+    case "fail-closed-infra":
+      return "FAILED";
   }
-  return "\u2705 **Review completed**";
+}
+function summaryWithVerdict(kind, summary) {
+  return `**Verdict: ${verdictFor(kind)}**
+
+${summary}`;
+}
+function formatReviewCompleteComment(kind, summary) {
+  const verdict = verdictFor(kind);
+  const lines = [
+    `${VERDICT_EMOJI[verdict]} **Review completed**`,
+    "",
+    `**Verdict: ${verdict}**`
+  ];
+  if (summary?.trim()) {
+    lines.push("", summary.trim());
+  }
+  return lines.join("\n");
 }
 
 // src/provider/claude/subscription.ts
@@ -13834,12 +13863,16 @@ async function runReview() {
   const publishWithProgress = async (kind, mode, summary, reviewComments) => {
     await postProgressComment(comments, ctx.prNumber, REVIEW_START_COMMENT);
     try {
-      const code = await publish(kind, mode, summary, reviewComments);
-      const conclusion = checkOutcomeFor(kind, mode).conclusion;
-      await postProgressComment(comments, ctx.prNumber, formatReviewCompleteComment(conclusion));
+      const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
+      await postProgressComment(comments, ctx.prNumber, formatReviewCompleteComment(kind, summary));
       return code;
     } catch (err) {
-      await postProgressComment(comments, ctx.prNumber, formatReviewCompleteComment("failure"));
+      const message = err instanceof Error ? err.message : String(err);
+      await postProgressComment(
+        comments,
+        ctx.prNumber,
+        formatReviewCompleteComment("fail-closed-infra", message)
+      );
       throw err;
     }
   };
