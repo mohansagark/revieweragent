@@ -1,10 +1,9 @@
-import type { AuthType } from "../core/config-schema.js";
+import type { AuthType, ProviderId } from "../core/config-schema.js";
 import type { PinnedShas } from "../core/pinned-shas.js";
+import { jobEnvFor } from "../core/secret-names.js";
+import { CURSOR_CLI_VERSION, CURSOR_TARBALL_SHA256 } from "../provider/cursor/agent.js";
 
-// SPEC.md §7 / §9: the generated workflow. Every line here traces to a
-// locked decision — do not add `pull_request`, do not add `merge_group`
-// (not in v1, SPEC §0/§8 step 4), never set `ref:` on checkout, never
-// both credential env vars.
+export { CURSOR_CLI_VERSION };
 
 export const WORKFLOW_MANAGED_HEADER = [
   "# Managed by revieweragent (npmjs.com/package/revieweragent)",
@@ -14,53 +13,43 @@ export const WORKFLOW_MANAGED_HEADER = [
 
 export const WORKFLOW_MARKER = "Managed by revieweragent";
 
-// Locked — renaming breaks every gate-mode install (SPEC.md §7). This is
-// the Checks API name required in branch protection, NOT the workflow
-// job id/name — GitHub auto-creates its own check run named after the
-// job the instant the job starts, and (per a Feb 2025 GitHub policy
-// change, confirmed empirically) blocks the default GITHUB_TOKEN from
-// updating that auto-check's conclusion via the API. Giving the job a
-// different id than this check name avoids that collision entirely.
 export const JOB_NAME = "revieweragent";
 export const WORKFLOW_JOB_ID = "revieweragent-run";
 
-// SPEC.md §7/§8: "CI uses a pinned copy, not the operator's global CLI."
-// Real bug found in manual testing: this install step didn't exist at
-// all — the subscription backend spawned `claude` assuming it was
-// already on PATH, which it never is on a fresh runner. The spawn failed
-// with ENOENT, silently misclassified as an availability-skip (no
-// logging), and reported a false "pass" — the model was never actually
-// called. Version matches the CLI build SPEC.md §8 verified end-to-end.
 export const CLAUDE_CLI_VERSION = "2.1.235";
 
 export interface WorkflowOptions {
   auth: AuthType;
+  provider?: ProviderId;
   shas: PinnedShas;
 }
 
-function credentialEnvLine(auth: AuthType): string {
-  return auth === "api-key"
-    ? "          ANTHROPIC_API_KEY: ${{ secrets.REVIEWERAGENT_ANTHROPIC_API_KEY }}"
-    : "          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}";
+function credentialEnvLine(provider: ProviderId, auth: AuthType): string {
+  const env = jobEnvFor(provider, auth);
+  return `          ${env.name}: \${{ secrets.${env.secret} }}`;
 }
 
 export function buildWorkflowYaml(opts: WorkflowOptions): string {
+  const provider = opts.provider ?? "claude";
   const { auth, shas } = opts;
+  const install = provider === "cursor" ? cursorCliInstallStep() : claudeCliInstallStep(auth, shas);
+  const installEnv = provider === "cursor" ? cursorInstallEnv() : subscriptionInstallEnv(auth);
   return `${WORKFLOW_MANAGED_HEADER}
 
 # run-name carries the PR head SHA so the per-actor fork cap can find the
 # revieweragent check when GitHub's Actions API leaves pull_requests empty
-# (cross-repo / forked PRs). github.sha is the fallback for issue_comment.
-run-name: revieweragent \${{ github.event.pull_request.head.sha || github.sha }}
+# (cross-repo / forked PRs). merge_group.head_sha covers the merge queue.
+run-name: revieweragent \${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
 
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review]
   issue_comment:
     types: [created]
+  merge_group:
 
 concurrency:
-  group: revieweragent-\${{ github.event.pull_request.number || github.event.issue.number }}
+  group: revieweragent-\${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
   cancel-in-progress: true
 
 permissions: {}
@@ -88,21 +77,15 @@ jobs:
       - uses: actions/checkout@${shas.checkoutSha}
         with:
           persist-credentials: false
-${claudeCliInstallStep(auth, shas)}      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
+${install}      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-${credentialEnvLine(auth)}
-${subscriptionInstallEnv(auth)}`;
+${credentialEnvLine(provider, auth)}
+${installEnv}`;
 }
 
 function claudeCliInstallStep(auth: AuthType, shas: PinnedShas): string {
   if (auth !== "subscription") return "";
-  // continue-on-error: SPEC.md §7/§9 — npm install failure is an
-  // availability skip, not fail-closed. The review step reads
-  // REVIEWERAGENT_CLI_INSTALL_FAILED and classifies ENOENT accordingly.
-  // actions/cache (SPEC.md §7, shipped 1.1.0): avoids a fresh npm fetch
-  // on every PR — cache key is pinned to the exact CLI version, so a
-  // version bump naturally invalidates it rather than serving stale.
   return `      - uses: actions/cache@${shas.cacheSha}
         with:
           path: ~/.npm
@@ -113,9 +96,39 @@ function claudeCliInstallStep(auth: AuthType, shas: PinnedShas): string {
 `;
 }
 
+function cursorCliInstallStep(): string {
+  return `      - id: install-cursor
+        continue-on-error: true
+        env:
+          CURSOR_CLI_VERSION: ${CURSOR_CLI_VERSION}
+          CURSOR_SHA_X64: ${CURSOR_TARBALL_SHA256.x64}
+          CURSOR_SHA_ARM64: ${CURSOR_TARBALL_SHA256.arm64}
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            x86_64|amd64) ARCH=x64; EXPECTED="$CURSOR_SHA_X64" ;;
+            aarch64|arm64) ARCH=arm64; EXPECTED="$CURSOR_SHA_ARM64" ;;
+            *) echo "unsupported arch $ARCH"; exit 1 ;;
+          esac
+          URL="https://downloads.cursor.com/lab/\${CURSOR_CLI_VERSION}/linux/\${ARCH}/agent-cli-package.tar.gz"
+          curl -fsSL "$URL" -o "$RUNNER_TEMP/cursor-agent.tgz"
+          GOT="$(sha256sum "$RUNNER_TEMP/cursor-agent.tgz" | awk '{print $1}')"
+          test "$GOT" = "$EXPECTED"
+          mkdir -p "$RUNNER_TEMP/cursor-agent"
+          tar --strip-components=1 -xzf "$RUNNER_TEMP/cursor-agent.tgz" -C "$RUNNER_TEMP/cursor-agent"
+`;
+}
+
 function subscriptionInstallEnv(auth: AuthType): string {
   if (auth !== "subscription") return "";
   return `          REVIEWERAGENT_CLI_INSTALL_FAILED: \${{ steps.install-claude.outcome == 'failure' }}
+`;
+}
+
+function cursorInstallEnv(): string {
+  return `          REVIEWERAGENT_CLI_INSTALL_FAILED: \${{ steps.install-cursor.outcome == 'failure' }}
+          REVIEWERAGENT_CURSOR_BIN: \${{ runner.temp }}/cursor-agent/cursor-agent
 `;
 }
 
@@ -133,11 +146,6 @@ export function isManagedWorkflow(raw: string): boolean {
   return raw.includes(WORKFLOW_MARKER);
 }
 
-/**
- * SPEC.md §7: re-run with marker present -> warn + overwrite (the warning
- * itself is the CLI layer's job, not this pure function's). File exists
- * without the marker -> refuse.
- */
 export function resolveWorkflowWrite(
   path: string,
   existingRaw: string | undefined,

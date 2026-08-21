@@ -2,15 +2,24 @@ import { minimatch } from "minimatch";
 import type { Octokit } from "@octokit/rest";
 import type { RevieweragentConfig } from "./config-schema.js";
 
-// SPEC.md §8 step 6: fetch PR files as data, apply `exclude` globs, sum
-// remaining `changes`. Gate mode always BLOCKs over-limit (on_limit is
-// ignored — over-limit is not a backdoor around the gate). Advisory mode
-// respects `on_limit`.
-
 export interface PrFile {
   filename: string;
   changes: number;
   patch?: string;
+}
+
+/** GitHub compare returns at most 300 files; pagination only walks commits. */
+export const COMPARE_FILES_CAP = 300;
+
+export class CompareTruncatedError extends Error {
+  constructor() {
+    super("GitHub compare API truncated the file list");
+    this.name = "CompareTruncatedError";
+  }
+}
+
+export function compareResponseIsTruncated(data: { truncated?: boolean; files?: unknown[] }): boolean {
+  return data.truncated === true || (data.files?.length ?? 0) >= COMPARE_FILES_CAP;
 }
 
 export async function fetchPrFiles(
@@ -31,6 +40,24 @@ export async function fetchPrFiles(
     }
   }
   return files;
+}
+
+export async function fetchCompareFiles(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  headSha: string,
+): Promise<PrFile[]> {
+  const { data } = await octokit.repos.compareCommits({ owner, repo, base: baseSha, head: headSha });
+  if (compareResponseIsTruncated(data)) {
+    throw new CompareTruncatedError();
+  }
+  return (data.files ?? []).map((f) => ({
+    filename: f.filename,
+    changes: f.changes,
+    patch: f.patch,
+  }));
 }
 
 export function filterExcluded(files: PrFile[], excludeGlobs: string[]): PrFile[] {

@@ -1,17 +1,16 @@
+import { parseMergeGroupPrNumber } from "./merge-group-reuse.js";
 import { readFileSync } from "node:fs";
 import type { Octokit } from "@octokit/rest";
 
 // SPEC.md §8 step 1: resolve PR number + head SHA + base SHA from the
-// event payload (pull_request_target or issue_comment). merge_group is
-// explicitly not in v1 (SPEC §0, §8 step 4) — its shape is not resolved
-// here.
+// event payload (pull_request_target, issue_comment, or merge_group).
 
 export type PullRequestEventAction = "opened" | "synchronize" | "ready_for_review";
 
 export interface EventContext {
-  eventName: "pull_request_target" | "issue_comment";
-  action: PullRequestEventAction | "created";
-  prNumber: number;
+  eventName: "pull_request_target" | "issue_comment" | "merge_group";
+  action: PullRequestEventAction | "created" | "checks_requested";
+  prNumber?: number;
   headSha: string;
   baseSha: string;
   isDraft: boolean;
@@ -25,7 +24,7 @@ export interface EventContext {
 
 export class UnsupportedEventError extends Error {
   constructor(eventName: string) {
-    super(`Unsupported or unhandled event: ${eventName} (merge_group is not in v1, SPEC.md §0/§8)`);
+    super(`Unsupported or unhandled event: ${eventName}`);
     this.name = "UnsupportedEventError";
   }
 }
@@ -49,6 +48,14 @@ interface IssueCommentPayload {
   issue: { number: number; pull_request?: unknown };
   comment: { body: string; user: { login: string } };
   repository: { full_name: string };
+}
+
+interface MergeGroupPayload {
+  merge_group: {
+    head_sha: string;
+    head_ref: string;
+    base_sha: string;
+  };
 }
 
 function readEventPayload<T>(): T {
@@ -102,6 +109,39 @@ export async function resolveEventContext(
       body: pr.body ?? "",
       commentBody: payload.comment.body,
       commenterLogin: payload.comment.user.login,
+    };
+  }
+
+  if (eventName === "merge_group") {
+    const payload = readEventPayload<MergeGroupPayload>();
+    const group = payload.merge_group;
+    const prNumber = parseMergeGroupPrNumber(group.head_ref);
+    if (prNumber === undefined) {
+      return {
+        eventName: "merge_group",
+        action: "checks_requested",
+        headSha: group.head_sha,
+        baseSha: group.base_sha,
+        isDraft: false,
+        isFork: false,
+        prAuthorLogin: "",
+        title: "",
+        body: "",
+      };
+    }
+    const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
+    const isFork = pr.head.repo?.full_name !== `${owner}/${repo}`;
+    return {
+      eventName: "merge_group",
+      action: "checks_requested",
+      prNumber,
+      headSha: group.head_sha,
+      baseSha: group.base_sha,
+      isDraft: pr.draft ?? false,
+      isFork,
+      prAuthorLogin: pr.user?.login ?? "",
+      title: pr.title ?? "",
+      body: pr.body ?? "",
     };
   }
 

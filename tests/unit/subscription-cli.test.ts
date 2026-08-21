@@ -6,6 +6,13 @@ import {
 } from "../../src/provider/claude/subscription.js";
 
 describe("classifyCliSpawnError", () => {
+  it("maps spawn E2BIG to fail-closed e2big", () => {
+    expect(classifyCliSpawnError({ code: "E2BIG", message: "spawn E2BIG" }, false)).toEqual({
+      kind: "e2big",
+    });
+    expect(classifyCliSpawnError({ message: "spawn E2BIG" }, true)).toEqual({ kind: "e2big" });
+  });
+
   it("treats ENOENT as fail-closed cli_missing when install did not fail", () => {
     expect(classifyCliSpawnError({ code: "ENOENT", message: "spawn claude ENOENT" }, false)).toEqual({
       kind: "cli_missing",

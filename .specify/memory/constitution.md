@@ -1,9 +1,8 @@
 <!--
 Sync Impact Report
-Version change: 1.1.0 → 1.1.1 (PATCH — Principle II: Cursor auth/CI + v2
-merge_group mapping; GHE Server is not a v1/v2 target)
-Modified principles: II (Cursor v2 auth/CI locked in SPEC.md §3/§8;
-merge_group reuse uses head_ref mapping, not SHA equality; GHE Server out)
+Version change: 1.1.1 → 1.2.0 (MINOR — Principle II: v2 commands, Cursor
+Agent row, merge_group reuse, CODEOWNERS write, OS keychain now ship)
+Modified principles: II (v2 is implemented; v3 remains undesigned)
 Added sections: none
 Removed sections: none
 Deferred placeholders: none
@@ -27,18 +26,17 @@ unverified "if the API supports it" language that cost rework. Treating it
 as authoritative, not aspirational, is what keeps that from repeating.
 
 ### II. Release-scope discipline (NON-NEGOTIABLE)
-v1 ships only `init`, `review`, and `uninstall`, per `SPEC.md` §0, and is
-done. **v2** is the specified follow-on (`upgrade`, `rotate-secret`,
-`apply-protection`, `merge_group` reuse with the locked `head_ref` mapping,
-CODEOWNERS writing, OS keychain) plus lighting up **Cursor** as an Agent
-provider — auth/CI locked in `SPEC.md` §3 / §8 (Dashboard API key +
-`agent --mode ask`, not Copilot GitHub-seat, not an unpinned install
-script). **v3** is undesigned work in §18 (other git hosts,
-Copilot/OpenAI/Gemini, org rollout, and so on). `/speckit-plan` and
-`/speckit-tasks` MUST NOT schedule v3 work inside a v2 plan, or v2 work
-disguised as a v1 patch. Branch protection stays a printed instruction in
-v1; auto-apply is v2 (`apply-protection`). GitHub.com / GHE Cloud only;
-GHE Server is not a v1/v2 target.
+v1 shipped `init`, `review`, and `uninstall`, per `SPEC.md` §0, and is
+done. **v2** ships `upgrade`, `rotate-secret`, `apply-protection`,
+`merge_group` reuse with the locked `head_ref` mapping, CODEOWNERS writing,
+OS keychain, and **Cursor** as an Agent provider — auth/CI locked in
+`SPEC.md` §3 / §8 (Dashboard API key + `agent --mode ask`, not Copilot
+GitHub-seat, not an unpinned install script). **v3** is undesigned work in
+§18 (other git hosts, Copilot/OpenAI/Gemini, org rollout, and so on).
+`/speckit-plan` and `/speckit-tasks` MUST NOT schedule v3 work inside a v2
+plan. Branch protection auto-apply is v2 (`apply-protection`) and MUST NOT
+run until the workflow exists on the default branch. GitHub.com / GHE Cloud
+only; GHE Server is not a v1/v2 target.
 
 **Rationale**: `SPEC.md` §0 slices the product down to the smallest thing
 that answers "are the reviews any good?" — every command beyond that is
@@ -144,4 +142,4 @@ resolved by amending this document rather than left as a standing
 exception. Runtime development guidance for agents lives in `SPEC.md` and
 the `.specify/` templates, not duplicated here.
 
-**Version**: 1.1.1 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21
+**Version**: 1.2.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21

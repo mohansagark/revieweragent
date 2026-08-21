@@ -4,17 +4,18 @@
 
 # run-name carries the PR head SHA so the per-actor fork cap can find the
 # revieweragent check when GitHub's Actions API leaves pull_requests empty
-# (cross-repo / forked PRs). github.sha is the fallback for issue_comment.
-run-name: revieweragent ${{ github.event.pull_request.head.sha || github.sha }}
+# (cross-repo / forked PRs). merge_group.head_sha covers the merge queue.
+run-name: revieweragent ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
 
 on:
   pull_request_target:
     types: [opened, synchronize, ready_for_review]
   issue_comment:
     types: [created]
+  merge_group:
 
 concurrency:
-  group: revieweragent-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: revieweragent-${{ github.event.pull_request.number || github.event.issue.number || github.event.merge_group.head_sha }}
   cancel-in-progress: true
 
 permissions: {}
@@ -49,7 +50,7 @@ jobs:
       - id: install-claude
         continue-on-error: true
         run: npm install -g @anthropic-ai/claude-code@2.1.235
-      - uses: mohansagark/revieweragent/actions/review@c95cf1a5cae5892c333db790ded9a78d0f29a4c9
+      - uses: mohansagark/revieweragent/actions/review@5880e4002083c5539903c010d47e10905d5c45b8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}

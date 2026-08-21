@@ -8,6 +8,7 @@ describe("classifyError", () => {
     expect(classifyError({ kind: "missing_secret" })).toBe("fail-closed");
     expect(classifyError({ kind: "invalid_json" })).toBe("fail-closed");
     expect(classifyError({ kind: "cli_missing" })).toBe("fail-closed");
+    expect(classifyError({ kind: "e2big" })).toBe("fail-closed");
   });
 
   it("classifies 429/5xx/npm-fetch-fail as availability-skip", () => {

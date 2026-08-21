@@ -9,20 +9,38 @@ import {
   InvalidConfigYamlError,
   UnrecognizedConfigVersionError,
   InvalidConfigError,
+  type Mode,
 } from "../core/config-schema.js";
 import { resolveEventContext, UnsupportedEventError } from "./review-event-context.js";
 import { decideSkip } from "./review-skip-rules.js";
-import { fetchPrFiles, checkLimits, decideLimitOutcome, filterExcluded } from "../core/diff-limits.js";
+import {
+  fetchPrFiles,
+  fetchCompareFiles,
+  checkLimits,
+  decideLimitOutcome,
+  filterExcluded,
+  CompareTruncatedError,
+} from "../core/diff-limits.js";
 import { wrapUntrustedData } from "../core/sanitizer.js";
 import { buildInstructionsPreamble } from "../core/system-prompt.js";
 import { parseFindings, InvalidFindingsError } from "../core/findings-schema.js";
 import { evaluateGate } from "../core/gate-evaluator.js";
-import { classifyError } from "../core/error-classifier.js";
+import { classifyError, type CheckOutcomeKind } from "../core/error-classifier.js";
 import { commentsInDiff, formatFilePatches } from "../core/review-payload.js";
 import { publishCheckAndReview } from "./review-outcome.js";
-import { REVIEW_START_MARKER, REVIEW_COMPLETE_MARKER, formatReviewStartComment, formatReviewCompleteComment, summaryWithVerdict } from "./review-progress.js";
+import type { FindingComment } from "../platform/types.js";
+import {
+  REVIEW_START_MARKER,
+  REVIEW_COMPLETE_MARKER,
+  formatReviewStartComment,
+  formatReviewCompleteComment,
+  summaryWithVerdict,
+} from "./review-progress.js";
 import { callSubscriptionBackend, ModelBackendError } from "../provider/claude/subscription.js";
 import { callApiKeyBackend } from "../provider/claude/api-key.js";
+import { callCursorBackend } from "../provider/cursor/backend.js";
+import { JOB_NAME } from "./write-workflow.js";
+import { shouldReuseMergeGroupCheck } from "./merge-group-reuse.js";
 
 const CONFIG_PATH = ".revieweragent.yml";
 const INSTRUCTIONS_PATH = ".revieweragent/instructions.md";
@@ -66,10 +84,10 @@ export async function runReview(): Promise<number> {
   }
 
   const publish = (
-    kind: Parameters<typeof publishCheckAndReview>[0]["kind"],
-    mode: Parameters<typeof publishCheckAndReview>[0]["mode"],
+    kind: CheckOutcomeKind,
+    mode: Mode,
     summary: string,
-    reviewComments?: Parameters<typeof publishCheckAndReview>[0]["comments"],
+    reviewComments?: FindingComment[],
   ) =>
     publishCheckAndReview({
       checks,
@@ -82,29 +100,24 @@ export async function runReview(): Promise<number> {
       comments: reviewComments,
     });
 
+  const maybeProgress = async (pr: number | undefined, marker: string, body: string) => {
+    if (pr === undefined) return;
+    await postProgressComment(comments, pr, marker, body);
+  };
+
   const publishWithProgress = async (
-    kind: Parameters<typeof publishCheckAndReview>[0]["kind"],
-    mode: Parameters<typeof publishCheckAndReview>[0]["mode"],
+    kind: CheckOutcomeKind,
+    mode: Mode,
     summary: string,
-    reviewComments?: Parameters<typeof publishCheckAndReview>[0]["comments"],
+    reviewComments?: FindingComment[],
   ): Promise<number> => {
-    await postProgressComment(comments, ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
+    await maybeProgress(ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
     try {
       const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
-      await postProgressComment(
-        comments,
-        ctx.prNumber,
-        REVIEW_COMPLETE_MARKER,
-        formatReviewCompleteComment(kind, summary),
-      );
+      await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment(kind, summary));
       return code;
     } catch (err) {
-      await postProgressComment(
-        comments,
-        ctx.prNumber,
-        REVIEW_COMPLETE_MARKER,
-        formatReviewCompleteComment("fail-closed-infra"),
-      );
+      await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment("fail-closed-infra"));
       throw err;
     }
   };
@@ -135,6 +148,33 @@ export async function runReview(): Promise<number> {
     return 0;
   }
 
+  if (ctx.eventName === "merge_group" && ctx.prNumber !== undefined) {
+    const { data: pr } = await octokit.pulls.get({ owner, repo, pull_number: ctx.prNumber });
+    const { data: listed } = await octokit.checks.listForRef({
+      owner,
+      repo,
+      ref: pr.head.sha,
+      check_name: JOB_NAME,
+    });
+    const existing = listed.check_runs[0];
+    if (
+      shouldReuseMergeGroupCheck({
+        checkConclusion: existing?.conclusion ?? undefined,
+        checkTitle: existing?.output?.title ?? undefined,
+        mergeGroupBaseSha: ctx.baseSha,
+        pullBaseSha: pr.base.sha,
+      })
+    ) {
+      await checks.upsertCheck(
+        ctx.headSha,
+        "success",
+        "PASS",
+        `Reused PR #${ctx.prNumber} review at ${pr.head.sha}.`,
+      );
+      return 0;
+    }
+  }
+
   if (ctx.eventName === "pull_request_target" && ctx.isFork && config.fork_policy === "auto") {
     const underCap = await isUnderActorCap(
       octokit,
@@ -149,7 +189,20 @@ export async function runReview(): Promise<number> {
     }
   }
 
-  const files = await fetchPrFiles(octokit, owner, repo, ctx.prNumber);
+  let files;
+  try {
+    files =
+      ctx.eventName === "merge_group" || ctx.prNumber === undefined
+        ? await fetchCompareFiles(octokit, owner, repo, ctx.baseSha, ctx.headSha)
+        : await fetchPrFiles(octokit, owner, repo, ctx.prNumber);
+  } catch (err) {
+    if (!(err instanceof CompareTruncatedError)) throw err;
+    const truncatedOutcome = decideLimitOutcome(config, true);
+    if (truncatedOutcome.kind === "advisory-skip") {
+      return await publishWithProgress("availability-skip", config.mode, "Diff too large — skipped review.");
+    }
+    return await publishWithProgress("fail-closed-infra", config.mode, "Diff too large — skipped review.");
+  }
   const included = filterExcluded(files, config.exclude);
   const { overLimit } = checkLimits(config, files);
   const limitOutcome = decideLimitOutcome(config, overLimit);
@@ -168,7 +221,7 @@ export async function runReview(): Promise<number> {
     diff: formatFilePatches(included),
   });
 
-  if (config.auth === "subscription" && process.env.ANTHROPIC_API_KEY) {
+  if (config.provider === "claude" && config.auth === "subscription" && process.env.ANTHROPIC_API_KEY) {
     return await publishWithProgress(
       "fail-closed-infra",
       config.mode,
@@ -178,10 +231,13 @@ export async function runReview(): Promise<number> {
 
   let rawOutput: string;
   try {
-    rawOutput =
-      config.auth === "subscription"
-        ? await callSubscriptionBackend(systemPrompt, userPayload)
-        : await callApiKeyBackend(systemPrompt, userPayload);
+    if (config.provider === "cursor") {
+      rawOutput = await callCursorBackend(systemPrompt, userPayload);
+    } else if (config.auth === "subscription") {
+      rawOutput = await callSubscriptionBackend(systemPrompt, userPayload);
+    } else {
+      rawOutput = await callApiKeyBackend(systemPrompt, userPayload);
+    }
   } catch (err) {
     if (err instanceof ModelBackendError) {
       const errClass = classifyError(err.classifiable);
@@ -189,6 +245,14 @@ export async function runReview(): Promise<number> {
         errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
         config.mode,
         err.message,
+      );
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "E2BIG") {
+      return await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit.",
       );
     }
     throw err;

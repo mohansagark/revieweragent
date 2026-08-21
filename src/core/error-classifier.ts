@@ -16,7 +16,8 @@ export type ClassifiableError =
   | { kind: "http_400"; auth: AuthType; quotaSignal?: boolean }
   | { kind: "http_5xx" }
   | { kind: "npm_fetch_fail_cache_miss" }
-  | { kind: "invalid_json" };
+  | { kind: "invalid_json" }
+  | { kind: "e2big" };
 
 export function classifyError(err: ClassifiableError): ErrorClass {
   switch (err.kind) {
@@ -25,6 +26,7 @@ export function classifyError(err: ClassifiableError): ErrorClass {
     case "http_401":
     case "http_403":
     case "invalid_json":
+    case "e2big":
       return "fail-closed";
     case "http_429":
     case "http_5xx":

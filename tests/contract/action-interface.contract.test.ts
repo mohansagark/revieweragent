@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
-import { buildWorkflowYaml, JOB_NAME, WORKFLOW_JOB_ID } from "../../src/cli/write-workflow.js";
+import { buildWorkflowYaml, JOB_NAME, WORKFLOW_JOB_ID, type WorkflowOptions } from "../../src/cli/write-workflow.js";
 
 // Validates the generated workflow against
 // specs/001-v1-core-commands/contracts/action-interface.md's required
-// shape: locked check name, permissions, no merge_group, exactly one
+// shape: locked check name, permissions, merge_group, exactly one
 // credential env var, base-only checkout.
 
 describe("action-interface contract", () => {
@@ -53,12 +53,12 @@ describe("action-interface contract", () => {
 
   it("sets run-name to the PR head SHA so fork actor-cap counting works when pull_requests is empty", () => {
     expect(yaml).toMatch(
-      /run-name:\s*revieweragent \$\{\{\s*github\.event\.pull_request\.head\.sha \|\| github\.sha\s*\}\}/,
+      /run-name:\s*revieweragent \$\{\{\s*github\.event\.pull_request\.head\.sha \|\| github\.event\.merge_group\.head_sha \|\| github\.sha\s*\}\}/,
     );
   });
 
-  it("does not include merge_group in v1's on: block", () => {
-    expect(doc.on.merge_group).toBeUndefined();
+  it("includes merge_group in v2's on: block and never mix pull_request", () => {
+    expect(doc.on.merge_group).toBeDefined();
     expect(doc.on.pull_request_target).toBeDefined();
     expect(doc.on.issue_comment).toBeDefined();
     expect(doc.on.pull_request).toBeUndefined();
@@ -98,7 +98,7 @@ describe("action-interface contract", () => {
     // GitHub Actions can never resolve, since actions/review only exists
     // in this package's own repo. WorkflowOptions has no owner/repo field
     // any more; only shas.actionOwner/actionRepo feed the `uses:` line.
-    const opts: Parameters<typeof buildWorkflowYaml>[0] = {
+    const opts: WorkflowOptions = {
       auth: "api-key",
       shas: {
         checkoutSha: "a".repeat(40),

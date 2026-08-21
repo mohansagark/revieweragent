@@ -20,4 +20,5 @@ export function printBranchProtectionInstructions(owner: string, repo: string): 
     "\nUntil you require this check, every PR merges regardless of the review outcome. " +
       "Do this after the workflow has run at least once on the default branch.",
   );
+  console.log("\nOr run: npx revieweragent apply-protection");
 }

@@ -1,8 +1,6 @@
 import type { Provider } from "../registry.js";
 
-// SPEC.md §3 — the only live registry row in v1. `secretName` values are
-// locked (SPEC.md §11); `ciBackend` documents which SPEC.md §8 path each
-// auth method drives.
+// SPEC.md §3 — Claude v1 live row. Cursor is a separate registry entry.
 export const claudeProvider: Provider = {
   id: "claude",
   displayName: "Claude",
@@ -22,5 +20,3 @@ export const claudeProvider: Provider = {
     },
   ],
 };
-
-export const providerRegistry: Provider[] = [claudeProvider];

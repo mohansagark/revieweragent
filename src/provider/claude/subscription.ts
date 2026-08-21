@@ -32,6 +32,7 @@ export function classifyCliSpawnError(
   err: { code?: string; message?: string },
   installFailed: boolean,
 ): ClassifiableError {
+  if (err.code === "E2BIG" || /\bE2BIG\b/i.test(err.message ?? "")) return { kind: "e2big" };
   if (installFailed) return { kind: "npm_fetch_fail_cache_miss" };
   return { kind: "cli_missing" };
 }
@@ -57,26 +58,37 @@ export function callSubscriptionBackend(
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      claudeBin,
-      [
-        "-p",
-        "--output-format",
-        "json",
-        "--tools",
-        "",
-        "--model",
-        "sonnet",
-        "--disable-slash-commands",
-        "--strict-mcp-config",
-        "--json-schema",
-        JSON.stringify(FINDINGS_JSON_SCHEMA),
-        "--system-prompt",
-        systemPrompt,
-        userPayload,
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
+    let child;
+    try {
+      child = spawn(
+        claudeBin,
+        [
+          "-p",
+          "--output-format",
+          "json",
+          "--tools",
+          "",
+          "--model",
+          "sonnet",
+          "--disable-slash-commands",
+          "--strict-mcp-config",
+          "--json-schema",
+          JSON.stringify(FINDINGS_JSON_SCHEMA),
+          "--system-prompt",
+          systemPrompt,
+          userPayload,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+    } catch (err) {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn claude CLI: ${(err as Error).message}`,
+          classifyCliSpawnError(err as NodeJS.ErrnoException, cliInstallFailed()),
+        ),
+      );
+      return;
+    }
 
     let stdout = "";
     let stderr = "";

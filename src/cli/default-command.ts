@@ -1,5 +1,5 @@
 /** Subcommands registered in `src/cli/index.ts`. Keep in sync — covered by test. */
-export const SUBCOMMANDS = ["init", "uninstall"] as const;
+export const SUBCOMMANDS = ["init", "uninstall", "upgrade", "rotate-secret", "apply-protection"] as const;
 
 const PASSTHROUGH = new Set<string>([...SUBCOMMANDS, "help"]);
 

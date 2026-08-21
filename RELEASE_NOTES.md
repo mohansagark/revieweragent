@@ -7,11 +7,11 @@ worth saying out loud. Keep appending shipped headlines here. When the list is
 strong enough to launch, flip **Launch status** and cut a public post from this
 page — do not invent copy at the last minute.
 
-**Launch status:** not ready. Technical v1 is live; marketing v1 is not.
+**Launch status:** not ready. Technical v1 is live; v2 is specified and
+implemented in-tree. Marketing v1 is not.
 
 **How to update:** add a dated bullet under **Shipped** when a user-visible
-capability lands. Move an item from **v2** into **Shipped** only after it
-ships. Do not log pins, SHA bumps, or CI-only fixes.
+capability lands. Do not log pins, SHA bumps, or CI-only fixes.
 
 ---
 
@@ -39,12 +39,20 @@ npx revieweragent init
 Repo maintainers who already pay for Claude Code and want that same reviewer on
 every PR, without standing up another bot or sharing a team API key.
 
-Not yet: GitLab / Bitbucket / Azure DevOps (**v3**), or “apply branch protection
-for me” (**v2**). Cursor as a second Agent is **v2**.
+Not yet: GitLab / Bitbucket / Azure DevOps (**v3**). Cursor is a second Agent
+in v2. `apply-protection` is the opt-in for requiring the `revieweragent` check.
 
 ---
 
 ## Shipped (say this)
+
+### 2026-08-21 — technical v2 (`npx revieweragent@1.2.0`)
+
+- **`upgrade`**, **`rotate-secret`**, and **`apply-protection`**.
+- **Cursor** as a second Agent (Dashboard / service-account API key, ask-mode CLI).
+- Merge-queue (`merge_group`) reuses a prior PASS when the mapping still holds.
+- Managed **CODEOWNERS** block on init; uninstall removes only that block.
+- OS keychain for the optional local credential cache, with the `0600` file as fallback.
 
 ### 2026-08-21 — technical v1.1.0 (`npx revieweragent@1.1.0`)
 
@@ -68,19 +76,6 @@ to talk about if this ships tomorrow.
 
 ---
 
-## v2 (specified — next, not shipped)
-
-Already designed in SPEC.md, including **Cursor** as a second Agent
-(Dashboard API key + Cursor CLI ask-mode; Claude stays the v1 default).
-
-- One-command **upgrade** of an existing install (today: re-run init)
-- **rotate-secret**
-- **Apply branch protection** for the `revieweragent` check
-- Merge-queue (`merge_group`) so gated PRs stay green in the queue
-- Auto-written `CODEOWNERS`
-- OS keychain for the local credential cache
-- **Cursor** (Claude stays the v1 default)
-
 ## v3 (no design yet — not a backlog)
 
 - GitLab / Bitbucket / Azure DevOps
@@ -95,7 +90,8 @@ Already designed in SPEC.md, including **Cursor** as a second Agent
 
 - SHA pins, workflow job ids, trusted publishing, sanitizer internals
 - “We have 171 tests”
-- Features that are still “re-run init” or “flip this in GitHub settings”
+- Features that are still “re-run init” for provider switches, or “flip this in
+  GitHub settings” when classic protection does not exist
 
 ---
 

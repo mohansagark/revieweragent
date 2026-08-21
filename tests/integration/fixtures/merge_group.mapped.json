@@ -1,0 +1,7 @@
+{
+  "merge_group": {
+    "head_sha": "mgheadsha",
+    "head_ref": "refs/heads/gh-readonly-queue/main/pr-42-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_sha": "mgbasesha"
+  }
+}
