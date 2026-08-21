@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import * as p from "@clack/prompts";
 import { createGitHubClient, parseOwnerRepo, resolveGitHubToken } from "../platform/github/client.js";
 import { createGitHubSecretsPort } from "../platform/github/secrets.js";
-import { parseConfig, type AuthType, type ProviderId } from "../core/config-schema.js";
+import { parseConfig, type AuthType, type FallbackConfig, type ProviderId } from "../core/config-schema.js";
 import { getGitRemoteUrl } from "../core/git.js";
 import { deleteManagedFiles } from "./delete-managed-files.js";
 import { deleteRepoSecret } from "./delete-secret.js";
@@ -13,10 +13,12 @@ import { removeManagedCodeowners } from "./codeowners.js";
 const CONFIG_PATH = ".revieweragent.yml";
 
 /** Best-effort auth lookup. Uninstall must still remove managed files if config is corrupt. */
-export function readInstallFromConfigRaw(raw: string): { auth: AuthType; provider: ProviderId } | undefined {
+export function readInstallFromConfigRaw(
+  raw: string,
+): { auth: AuthType; provider: ProviderId; fallback?: FallbackConfig } | undefined {
   try {
     const config = parseConfig(raw);
-    return { auth: config.auth, provider: config.provider };
+    return { auth: config.auth, provider: config.provider, fallback: config.fallback };
   } catch {
     return undefined;
   }
@@ -82,7 +84,7 @@ export async function runUninstall(options: UninstallOptions): Promise<void> {
       wantsSecretDeletion = !p.isCancel(answer) && answer;
     }
     const secrets = createGitHubSecretsPort(octokit, owner, repo);
-    const secretDeleted = await deleteRepoSecret(secrets, auth, wantsSecretDeletion, provider);
+    const secretDeleted = await deleteRepoSecret(secrets, auth, wantsSecretDeletion, provider, install?.fallback);
     console.log(secretDeleted ? "Repo secret deleted." : "Repo secret left in place.");
   }
 

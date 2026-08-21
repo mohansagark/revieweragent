@@ -1,8 +1,9 @@
 <!--
 Sync Impact Report
-Version change: 1.1.1 → 1.2.0 (MINOR — Principle II: v2 commands, Cursor
-Agent row, merge_group reuse, CODEOWNERS write, OS keychain now ship)
-Modified principles: II (v2 is implemented; v3 remains undesigned)
+Version change: 1.2.0 → 1.3.0 (MINOR — Principle II: Gemini Model is live;
+optional different-method fallback. Principle III: opt-in dual-quota
+fail-closed exception. OpenAI / Copilot / multi-primary remain undesigned.)
+Modified principles: II, III
 Added sections: none
 Removed sections: none
 Deferred placeholders: none
@@ -31,8 +32,11 @@ done. **v2** ships `upgrade`, `rotate-secret`, `apply-protection`,
 `merge_group` reuse with the locked `head_ref` mapping, CODEOWNERS writing,
 OS keychain, and **Cursor** as an Agent provider — auth/CI locked in
 `SPEC.md` §3 / §8 (Dashboard API key + `agent --mode ask`, not Copilot
-GitHub-seat, not an unpinned install script). **v3** is undesigned work in
-§18 (other git hosts, Copilot/OpenAI/Gemini, org rollout, and so on).
+GitHub-seat, not an unpinned install script). **Gemini Model (`api-key`)**
+is live, including as an optional different-method **fallback** that runs
+only on primary HTTP 429 or Claude subscription plan-quota 400. **v3** is
+undesigned work in §18 (other git hosts, Copilot/OpenAI, org rollout, and
+so on).
 `/speckit-plan` and `/speckit-tasks` MUST NOT schedule v3 work inside a v2
 plan. Branch protection auto-apply is v2 (`apply-protection`) and MUST NOT
 run until the workflow exists on the default branch. GitHub.com / GHE Cloud
@@ -46,8 +50,13 @@ scaffolding that delays the only feedback that matters.
 Auth failures (expired token, 401, 403) MUST fail closed in gate mode —
 never silently pass a PR. Transient/provider failures (429, 400 credit,
 overload, 5xx) MUST be classified as availability skip, not fail-closed,
-and MUST NOT block merges. This distinction is locked in `SPEC.md` §9/§11
-and MUST be preserved in every error path the runner adds.
+and MUST NOT block merges **unless the install opted into `fallback`**.
+Primary 429 / subscription plan-quota remains an availability skip when no
+fallback is configured. When fallback is set, exhaustion of both providers
+(or a missing/empty fallback secret, or a fallback CLI that cannot start)
+MUST fail-closed — that is an explicit operator choice, not the default.
+This distinction is locked in `SPEC.md` §9/§11 and MUST be preserved in
+every error path the runner adds.
 
 **Rationale**: Conflating "we couldn't reach the model" with "the model
 found a problem" either blocks merges on a provider outage or, worse,
@@ -96,10 +105,15 @@ is small next to the cost of shipping on a wrong assumption a second time.
 
 ## Security & Sanitization Requirements
 
-- One auth secret per repo (`REVIEWERAGENT_ANTHROPIC_API_KEY`,
-  `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`, or v2
-  `REVIEWERAGENT_CURSOR_API_KEY`), never two live at once.
-  Switching auth or provider deletes the unused secret after confirmation.
+- One **primary** auth secret per repo (`REVIEWERAGENT_ANTHROPIC_API_KEY`,
+  `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`, `REVIEWERAGENT_CURSOR_API_KEY`,
+  or `REVIEWERAGENT_GEMINI_API_KEY`), matching `provider` + `auth`.
+  Optionally one **fallback** secret of a **different** `(provider, auth)`
+  method. Primary Claude subscription MUST never spawn the Claude CLI with
+  `ANTHROPIC_API_KEY` in that child env (use
+  `REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY` when Claude api-key is the
+  fallback). Switching auth or provider deletes secrets that are neither
+  primary nor fallback after confirmation.
 - Secrets are never echoed to logs; debug paths MUST mask them.
 - Workflow triggers use a single `on:` block — no `pull_request` /
   `pull_request_target` mixing (`SPEC.md` §9).
@@ -142,4 +156,4 @@ resolved by amending this document rather than left as a standing
 exception. Runtime development guidance for agents lives in `SPEC.md` and
 the `.specify/` templates, not duplicated here.
 
-**Version**: 1.2.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21
+**Version**: 1.3.0 | **Ratified**: 2026-08-19 | **Last Amended**: 2026-08-21

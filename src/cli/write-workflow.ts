@@ -1,6 +1,6 @@
-import type { AuthType, ProviderId } from "../core/config-schema.js";
+import type { AuthType, FallbackConfig, ProviderId } from "../core/config-schema.js";
 import type { PinnedShas } from "../core/pinned-shas.js";
-import { jobEnvFor } from "../core/secret-names.js";
+import { jobEnvFor, methodNeedsClaudeCli, methodNeedsCursorCli } from "../core/secret-names.js";
 import { CURSOR_CLI_VERSION, CURSOR_TARBALL_SHA256 } from "../provider/cursor/agent.js";
 
 export { CURSOR_CLI_VERSION };
@@ -21,19 +21,35 @@ export const CLAUDE_CLI_VERSION = "2.1.235";
 export interface WorkflowOptions {
   auth: AuthType;
   provider?: ProviderId;
+  fallback?: FallbackConfig;
   shas: PinnedShas;
 }
 
-function credentialEnvLine(provider: ProviderId, auth: AuthType): string {
-  const env = jobEnvFor(provider, auth);
+function credentialEnvLine(
+  provider: ProviderId,
+  auth: AuthType,
+  opts?: { role?: "primary" | "fallback"; primary?: { provider: ProviderId; auth: AuthType } },
+): string {
+  const env = jobEnvFor(provider, auth, opts);
   return `          ${env.name}: \${{ secrets.${env.secret} }}`;
 }
 
 export function buildWorkflowYaml(opts: WorkflowOptions): string {
   const provider = opts.provider ?? "claude";
-  const { auth, shas } = opts;
-  const install = provider === "cursor" ? cursorCliInstallStep() : claudeCliInstallStep(auth, shas);
-  const installEnv = provider === "cursor" ? cursorInstallEnv() : subscriptionInstallEnv(auth);
+  const { auth, shas, fallback } = opts;
+  const needClaude = methodNeedsClaudeCli(provider, auth) || (fallback ? methodNeedsClaudeCli(fallback.provider, fallback.auth) : false);
+  const needCursor = methodNeedsCursorCli(provider) || (fallback ? methodNeedsCursorCli(fallback.provider) : false);
+  const install = `${claudeCliInstallStep(needClaude, shas)}${needCursor ? cursorCliInstallStep() : ""}`;
+  const credLines = [
+    credentialEnvLine(provider, auth),
+    fallback
+      ? credentialEnvLine(fallback.provider, fallback.auth, {
+          role: "fallback",
+          primary: { provider, auth },
+        })
+      : "",
+  ].filter(Boolean);
+  const installEnv = reviewInstallEnv(needClaude, needCursor);
   return `${WORKFLOW_MANAGED_HEADER}
 
 # run-name carries the PR head SHA so the per-actor fork cap can find the
@@ -80,12 +96,12 @@ jobs:
 ${install}      - uses: ${shas.actionOwner}/${shas.actionRepo}/actions/review@${shas.reviewActionSha}
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-${credentialEnvLine(provider, auth)}
+${credLines.join("\n")}
 ${installEnv}`;
 }
 
-function claudeCliInstallStep(auth: AuthType, shas: PinnedShas): string {
-  if (auth !== "subscription") return "";
+function claudeCliInstallStep(need: boolean, shas: PinnedShas): string {
+  if (!need) return "";
   return `      - uses: actions/cache@${shas.cacheSha}
         with:
           path: ~/.npm
@@ -120,16 +136,16 @@ function cursorCliInstallStep(): string {
 `;
 }
 
-function subscriptionInstallEnv(auth: AuthType): string {
-  if (auth !== "subscription") return "";
-  return `          REVIEWERAGENT_CLI_INSTALL_FAILED: \${{ steps.install-claude.outcome == 'failure' }}
-`;
-}
-
-function cursorInstallEnv(): string {
-  return `          REVIEWERAGENT_CLI_INSTALL_FAILED: \${{ steps.install-cursor.outcome == 'failure' }}
-          REVIEWERAGENT_CURSOR_BIN: \${{ runner.temp }}/cursor-agent/cursor-agent
-`;
+function reviewInstallEnv(needClaude: boolean, needCursor: boolean): string {
+  const lines: string[] = [];
+  if (needClaude) {
+    lines.push(`          REVIEWERAGENT_CLI_INSTALL_FAILED: \${{ steps.install-claude.outcome == 'failure' }}`);
+  }
+  if (needCursor) {
+    lines.push(`          REVIEWERAGENT_CURSOR_CLI_INSTALL_FAILED: \${{ steps.install-cursor.outcome == 'failure' }}`);
+    lines.push(`          REVIEWERAGENT_CURSOR_BIN: \${{ runner.temp }}/cursor-agent/cursor-agent`);
+  }
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }
 
 export class UnmarkedWorkflowConflictError extends Error {

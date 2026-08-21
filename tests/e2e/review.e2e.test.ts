@@ -10,6 +10,7 @@ const githubState = vi.hoisted(() => ({
   current: undefined as FakeGithub | undefined,
   subscription: vi.fn(),
   apiKey: vi.fn(),
+  gemini: vi.fn(),
 }));
 
 vi.mock("../../src/platform/github/client.js", async (importOriginal) => {
@@ -34,6 +35,14 @@ vi.mock("../../src/provider/claude/api-key.js", async (importOriginal) => {
   return {
     ...actual,
     callApiKeyBackend: (...args: unknown[]) => githubState.apiKey(...args),
+  };
+});
+
+vi.mock("../../src/provider/gemini/api-key.js", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("../../src/provider/gemini/api-key.js");
+  return {
+    ...actual,
+    callGeminiBackend: (...args: unknown[]) => githubState.gemini(...args),
   };
 });
 
@@ -92,8 +101,10 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     githubState.current = await createFakeGithub();
     githubState.subscription.mockReset();
     githubState.apiKey.mockReset();
+    githubState.gemini.mockReset();
     githubState.subscription.mockResolvedValue(PASS_JSON);
     githubState.apiKey.mockResolvedValue(PASS_JSON);
+    githubState.gemini.mockResolvedValue(PASS_JSON);
 
     repo = createTempGitRepo();
     process.chdir(repo.dir);
@@ -106,6 +117,8 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     process.env.GITHUB_EVENT_PATH = eventPath;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY;
     Object.assign(process.env, opts?.extraEnv ?? {});
     return githubState.current;
   }
@@ -456,5 +469,122 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     expect(githubState.subscription).toHaveBeenCalledOnce();
     expect(github.calls.createReview).toHaveLength(1);
     expect(github.checks.some((c) => c.headSha === mergeSha)).toBe(true);
+  });
+
+  it("falls back to Gemini on primary 429 and PASSes", async () => {
+    const github = await setup({
+      config: {
+        mode: "gate",
+        auth: "subscription",
+        fallback: { provider: "gemini", auth: "api-key" },
+      },
+      extraEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-test-token-not-real",
+        GEMINI_API_KEY: "AIza-test-key",
+      },
+    });
+    githubState.subscription.mockRejectedValue(
+      new ModelBackendError("Claude Code rate limited", { kind: "http_429" }),
+    );
+    await expect(runReview()).resolves.toBe(0);
+    expect(githubState.gemini).toHaveBeenCalledOnce();
+    expect(github.checks[0]?.conclusion).toBe("success");
+    expect((github.calls.createComment[1] as { body: string }).body).toContain("fallback: gemini");
+  });
+
+  it("skips a primary 429 when no fallback is configured", async () => {
+    const github = await setup({ config: { mode: "gate", auth: "subscription" } });
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-test-token-not-real";
+    githubState.subscription.mockRejectedValue(
+      new ModelBackendError("Claude Code rate limited", { kind: "http_429" }),
+    );
+    await expect(runReview()).resolves.toBe(0);
+    expect(githubState.gemini).not.toHaveBeenCalled();
+    expect(github.checks[0]?.conclusion).toBe("success");
+    expect(github.checks[0]?.output?.title).toMatch(/Review skipped/);
+  });
+
+  it("fail-closes when primary and fallback are both rate-limited", async () => {
+    const github = await setup({
+      config: {
+        mode: "gate",
+        auth: "subscription",
+        fallback: { provider: "gemini", auth: "api-key" },
+      },
+      extraEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-test-token-not-real",
+        GEMINI_API_KEY: "AIza-test-key",
+      },
+    });
+    githubState.subscription.mockRejectedValue(
+      new ModelBackendError("Claude Code rate limited", { kind: "http_429" }),
+    );
+    githubState.gemini.mockRejectedValue(
+      new ModelBackendError("Gemini generateContent returned HTTP 429", { kind: "http_429" }),
+    );
+    await expect(runReview()).resolves.toBe(1);
+    expect(github.checks[0]?.conclusion).toBe("failure");
+    expect(github.checks[0]?.output?.summary).toMatch(/Primary and fallback/);
+    expect((github.calls.createComment[1] as { body: string }).body).not.toMatch(/rate-limited/);
+  });
+
+  it("does not call Gemini when primary Claude CLI install fails even if fallback is set", async () => {
+    const github = await setup({
+      config: {
+        mode: "gate",
+        auth: "subscription",
+        fallback: { provider: "gemini", auth: "api-key" },
+      },
+      extraEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-test-token-not-real",
+        GEMINI_API_KEY: "AIza-test-key",
+      },
+    });
+    githubState.subscription.mockRejectedValue(
+      new ModelBackendError("Claude CLI install failed", { kind: "npm_fetch_fail_cache_miss" }),
+    );
+    await expect(runReview()).resolves.toBe(0);
+    expect(githubState.gemini).not.toHaveBeenCalled();
+    expect(github.checks[0]?.output?.title).toMatch(/Review skipped/);
+  });
+
+  it("still calls primary Gemini when the unused Claude CLI install failed", async () => {
+    await setup({
+      config: { provider: "gemini", auth: "api-key" },
+      extraEnv: {
+        GEMINI_API_KEY: "AIza-test-key",
+        REVIEWERAGENT_CLI_INSTALL_FAILED: "true",
+      },
+    });
+    await expect(runReview()).resolves.toBe(0);
+    expect(githubState.gemini).toHaveBeenCalledOnce();
+    expect(githubState.subscription).not.toHaveBeenCalled();
+  });
+
+  it("dispatches api-key by provider so Gemini does not call Anthropic", async () => {
+    await setup({
+      config: { provider: "gemini", auth: "api-key" },
+      extraEnv: { GEMINI_API_KEY: "AIza-test-key" },
+    });
+    await expect(runReview()).resolves.toBe(0);
+    expect(githubState.gemini).toHaveBeenCalledOnce();
+    expect(githubState.apiKey).not.toHaveBeenCalled();
+  });
+
+  it("does not treat REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY as a subscription mix", async () => {
+    const github = await setup({
+      config: {
+        auth: "subscription",
+        fallback: { provider: "claude", auth: "api-key" },
+      },
+      extraEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-test-token-not-real",
+        REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY: "sk-ant-testkey",
+      },
+    });
+    await expect(runReview()).resolves.toBe(0);
+    expect(github.checks[0]?.conclusion).toBe("success");
+    expect(github.checks[0]?.output?.summary).not.toMatch(/mix credentials/);
+    expect(githubState.subscription).toHaveBeenCalledOnce();
   });
 });

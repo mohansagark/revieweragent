@@ -19,6 +19,24 @@ describe("upgrade (v2)", () => {
     expect(next).toContain("Managed by revieweragent");
   });
 
+  it("preserves fallback env when re-pinning", () => {
+    const next = upgradeManagedWorkflow(
+      MANAGED,
+      [
+        "version: 1",
+        "provider: claude",
+        "auth: subscription",
+        "mode: advisory",
+        "fallback:",
+        "  provider: gemini",
+        "  auth: api-key",
+      ].join("\n"),
+    );
+    expect(next).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(next).toContain("GEMINI_API_KEY");
+    expect(next).not.toContain("ANTHROPIC_API_KEY");
+  });
+
   it("refuses to overwrite an unmarked workflow", () => {
     expect(() =>
       upgradeManagedWorkflow("name: not-ours\n", "version: 1\nprovider: claude\nauth: subscription\nmode: advisory\n"),

@@ -56,4 +56,39 @@ describe("exactly one credential in the generated workflow", () => {
     expect(yaml).not.toContain("ANTHROPIC_API_KEY");
     expect(yaml).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
   });
+
+  it("emits primary Claude OAuth plus Gemini fallback without ANTHROPIC_API_KEY", () => {
+    const yaml = buildWorkflowYaml({
+      auth: "subscription",
+      provider: "claude",
+      fallback: { provider: "gemini", auth: "api-key" },
+      shas: {
+        checkoutSha: "a".repeat(40),
+        reviewActionSha: "b".repeat(40),
+        actionOwner: "revieweragent-org",
+        actionRepo: "revieweragent",
+        cacheSha: "c".repeat(40),
+      },
+    });
+    expect(yaml).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(yaml).toContain("GEMINI_API_KEY");
+    expect(yaml).not.toContain("ANTHROPIC_API_KEY");
+  });
+
+  it("maps Claude api-key fallback to REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY", () => {
+    const yaml = buildWorkflowYaml({
+      auth: "subscription",
+      provider: "claude",
+      fallback: { provider: "claude", auth: "api-key" },
+      shas: {
+        checkoutSha: "a".repeat(40),
+        reviewActionSha: "b".repeat(40),
+        actionOwner: "revieweragent-org",
+        actionRepo: "revieweragent",
+        cacheSha: "c".repeat(40),
+      },
+    });
+    expect(yaml).toContain("REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY");
+    expect(yaml).not.toMatch(/^\s+ANTHROPIC_API_KEY:/m);
+  });
 });

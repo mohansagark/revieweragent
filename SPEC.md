@@ -44,7 +44,7 @@ follow-on work is **v2**. Work with no design yet is **v3** — not an unnamed
 | Branch protection (§13) | **manual.** Print the exact check name + settings link; user flips it | auto RMW + verify via `apply-protection` | — |
 | Auth paths | both (`subscription`, `api-key`) | — | Copilot-style GitHub-seat auth (distinct path) |
 | Agent providers (§3) | Claude (Claude Code) | **Cursor** (Agent / `subscription-oauth` category; Dashboard API key + `agent --mode ask`, §3 / §8) | GitHub Copilot, other agents |
-| Model providers (§3) | Claude (Console API key) | — | OpenAI, Gemini |
+| Model providers (§3) | Claude (Console API key) | **Gemini** (API key) + optional different-method fallback | OpenAI |
 | Local credential cache | yes — plaintext `0600` | OS keychain | — |
 | Fork policy | `auto` default + simple per-actor hourly cap (Actions API + check exists; §8 step 5) | — | tuned / adaptive rate limiting |
 | Timeline comments | start/complete issue comments, plaintext markers (§7.1) | — | in-thread replies to inline comments |
@@ -162,7 +162,7 @@ list** for that category.
 | Category (prompt) | Auth type | v1 (live) | v2 | v3 |
 |---|---|---|---|---|
 | **Agent** | `subscription-oauth` | Claude (Claude Code Pro/Max/Team/Enterprise) | **Cursor** | GitHub Copilot, other agent tools |
-| **Model** | `api-key` | Claude (Console API key) | — | OpenAI, Gemini |
+| **Model** | `api-key` | Claude (Console API key) | **Gemini** (Google AI Studio API key) | OpenAI |
 
 A provider with no method in the chosen category is omitted from that list.
 v1 lists one row either way: **Claude**. v2 adds **Cursor** as a second Agent
@@ -438,7 +438,7 @@ Interactive (default):
      registry-filtered `subscription-oauth` providers. v1: **Claude**
      (Claude Code). v2: **Cursor**. v3: GitHub Copilot, other agent tools.
    - **Model** — API keys. List underneath is the registry-filtered
-     `api-key` providers. v1: **Claude** (Console). v3: OpenAI, Gemini.
+     `api-key` providers. v1: **Claude** (Console). Gemini (Google AI Studio) is live. v3: OpenAI.
 3. **Pick a provider** from that list. v1: one entry (Claude). v2: Claude
    and Cursor (Agent list). Then acquire
    the credential for that provider + category:
@@ -454,6 +454,7 @@ Interactive (default):
      key, or reuse cache. Offer to open `https://cursor.com/dashboard/api`.
      Do not run `agent login`.
    - Model / Claude: masked paste of the Console API key, or reuse cache.
+   - Model / Gemini: masked paste of the Google AI Studio API key (`GEMINI_API_KEY`), or reuse cache. Do not run the Anthropic `sk-ant` validator.
 4. Dependency checks (§6), confirm-gated fixes. If `gh` is present but not
    authenticated, run `gh auth login` (its own browser/device-code flow —
    same class of unavoidable identity step as `setup-token` or a PAT, just
@@ -467,7 +468,7 @@ Interactive (default):
    default) reviews every fork PR and shares that quota. Gate mode in v1
    **emits** the check but does **not** require it until the user flips
    settings after the workflow is on the default branch.
-5. Advisory or gate mode? If gate: severity threshold (default `high`).
+5. Advisory or gate mode? If gate: severity threshold (default `high`). Then: **Configure a fallback provider?** Default **no** on a fresh install; default **yes** when config already has `fallback`. If yes, the same Agent/Model → provider → credential path with the primary `(provider, auth)` pair omitted. Fallback must be a different method. Dual-quota fail-closed can freeze merges on public + `fork_policy: auto` — warn at init. Gemini free-tier training note when Gemini is chosen as primary or fallback.
 6. Push/update the repo secret (§11).
 7. Write files (§7). **v1:** print the CODEOWNERS recommendation rather than
    writing entries (§0). **Re-init with a different `provider` or `auth`:**
@@ -628,17 +629,23 @@ a settings/rulesets link.
   (§9), not fail-closed — an npm registry outage must not freeze merges.
   Do not cache the Cursor tarball against an unpinned URL; pin version +
   sha256 and cache the extracted directory under `$RUNNER_TEMP` if needed.
-- Pass **exactly one** credential into the job env, matching `auth` in
-  `.revieweragent.yml`:
+- Pass the **primary** credential into the job env, matching `auth` /
+  `provider` in `.revieweragent.yml`. When `fallback` is set, also pass the
+  fallback credential (mapped so a Claude subscription primary never sees
+  `ANTHROPIC_API_KEY` in the Claude CLI child env):
 
   - `api-key` + Claude → `ANTHROPIC_API_KEY: ${{ secrets.REVIEWERAGENT_ANTHROPIC_API_KEY }}`
   - `subscription` + Claude → `CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN }}`
   - `subscription` + Cursor → `CURSOR_API_KEY: ${{ secrets.REVIEWERAGENT_CURSOR_API_KEY }}`
+  - `api-key` + Gemini → `GEMINI_API_KEY: ${{ secrets.REVIEWERAGENT_GEMINI_API_KEY }}`
+  - Claude `api-key` **fallback** while primary is Claude `subscription` →
+    `REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY` (same Actions secret)
 
-  Never two of these. Cursor jobs skip the Claude CLI install step and
-  instead extract the pinned Cursor CLI tarball (§3) before the review
-  step. Tarball fetch failure is an **availability skip**, same as Claude
-  npm install failure.
+  Without `fallback`, never two of these. Install steps are the **union** of
+  CLIs either role needs. Cursor jobs that need the Cursor CLI extract the
+  pinned tarball; Claude subscription jobs install pinned `@anthropic-ai/claude-code`.
+  Tarball / npm install failure is an **availability skip** for that CLI
+  backend, not a fallback trigger. Gemini HTTP never short-circuits on CLI flags.
 
 #### Why not `anthropics/claude-code-action` (verified, not assumed)
 
@@ -685,8 +692,19 @@ never from PR head.
 ```yaml
 # Managed by revieweragent — schema version below is required.
 version: 1
-provider: claude            # claude | cursor
-auth: subscription          # subscription | api-key (cursor: subscription only)
+provider: claude            # claude | cursor | gemini
+auth: subscription          # subscription | api-key (cursor: subscription only; gemini: api-key only)
+mode: advisory          # advisory | gate
+block_severity: high    # any | critical | high | medium | low
+max_diff_lines: 4000
+max_prompt_tokens: 80000
+on_limit: skip          # advisory only: skip | block. Gate always blocks on over-limit.
+max_fork_reviews_per_actor_per_hour: 5
+fork_policy: auto           # auto | comment-gated
+trigger_phrase: "/review"
+# fallback:                 # optional; omit for skip-and-pass on primary 429/quota
+#   provider: gemini
+#   auth: api-key
 mode: advisory          # advisory | gate
 block_severity: high    # any | critical | high | medium | low
 max_diff_lines: 4000
@@ -1147,10 +1165,16 @@ Quota/abuse control for `auto`:
   switch `auto` ↔ `comment-gated`.
 - Diff/token limits.
 - **429 / provider overload / `subscription` plan-quota 400 is not
-  fail-closed** (§9). An outsider must not freeze every merge in the repo by
-  draining quota. Note `auth: api-key` credit-balance 400 **does** fail
-  closed — an outsider cannot empty a Console balance the way fork PRs can
-  burn plan quota, and it never recovers on its own (§8).
+  fail-closed** on the primary path (§9). An outsider must not freeze every
+  merge in the repo by draining quota. **Opt-in exception:** when `fallback`
+  is configured, exhaustion of **both** primary and fallback (or a missing
+  fallback secret / unusable fallback CLI) **does** fail-closed. Init warns
+  on public + `fork_policy: auto`. Note `auth: api-key` credit-balance 400
+  **does** fail closed — an outsider cannot empty a Console balance the way
+  fork PRs can burn plan quota, and it never recovers on its own (§8).
+  Gemini `RESOURCE_EXHAUSTED` in a 429 or 403 body is classified as 429
+  (availability / fallback trigger). An invalid Gemini key is 403
+  (fail-closed).
 - Installer warning on public repos.
 
 `comment-gated` is the opt-in tighter policy. GitHub's "require approval for
@@ -1260,8 +1284,8 @@ refills; an empty Console credit balance is neither.
 
 | Class | Examples | Gate behavior |
 |---|---|---|
-| **Fail-closed** | Missing secret, 401/403 expired or revoked token, **`auth: api-key` HTTP 400 credit/billing**, invalid JSON with no quota signal, over-limit, BLOCK findings | `failure` + exit 1. Merges wait until an operator or a passing review. |
-| **Availability skip** | HTTP 429; **`auth: subscription` plan-quota 400**; provider overload / 5xx / 529; Claude CLI npm fetch fail on cache miss | `success` + `Review skipped:` + COMMENT explanation. **This PR and other PRs can still merge.** |
+| **Fail-closed** | Missing secret, 401/403 expired or revoked token, **`auth: api-key` HTTP 400 credit/billing**, invalid JSON with no quota signal, over-limit, BLOCK findings, **opt-in fallback dual-quota / missing fallback secret / unusable fallback CLI** | `failure` + exit 1. Merges wait until an operator or a passing review. |
+| **Availability skip** | HTTP 429 (primary, **no fallback configured**); **`auth: subscription` plan-quota 400** (same); provider overload / 5xx / 529; Claude CLI npm fetch fail on cache miss | `success` + `Review skipped:` + COMMENT explanation. **This PR and other PRs can still merge.** |
 | **No check** | Drafts; `comment-gated` fork with no `/review`; per-actor fork rate-limit exceeded | No check on head. That PR cannot satisfy the required check; others unaffected. |
 
 Advisory mode: never fail-closed; post the explanation and exit 0.
@@ -1308,16 +1332,19 @@ delimiters. It cannot disable schema validation or the code-side gate.
 
 ## 11. Secret lifecycle
 
-One auth method per repo. Init writes **one** secret. Switching
-auth **or provider** on re-init deletes the unused name (after confirm) and
-PUTs the new one.
+One **primary** auth method per repo, plus an optional **fallback** of a
+different `(provider, auth)` method. Init writes the primary secret and,
+when configured, the fallback secret. Switching auth or provider on re-init
+deletes secrets that are neither primary nor fallback (after confirm) and
+PUTs the new ones. Omitting fallback flags in non-interactive re-init
+removes fallback.
 
-| Item | Claude `api-key` | Claude `subscription` | Cursor `subscription` |
-|---|---|---|---|
-| GitHub Actions secret name | `REVIEWERAGENT_ANTHROPIC_API_KEY` | `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` | `REVIEWERAGENT_CURSOR_API_KEY` |
-| Job env var | `ANTHROPIC_API_KEY` | `CLAUDE_CODE_OAUTH_TOKEN` | `CURSOR_API_KEY` |
-| Acquire | Paste Console key | `claude setup-token` (browser); 1-year token | Paste Dashboard / service-account key |
-| Local cache | `~/.config/revieweragent/credentials.json` (`0600`) in v1; OS keychain in v2 (§11.1). **v2 file shape is a map keyed `{provider}:{auth}`** so Claude and Cursor can both be cached. | same | same |
+| Item | Claude `api-key` | Claude `subscription` | Cursor `subscription` | Gemini `api-key` |
+|---|---|---|---|---|
+| GitHub Actions secret name | `REVIEWERAGENT_ANTHROPIC_API_KEY` | `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN` | `REVIEWERAGENT_CURSOR_API_KEY` | `REVIEWERAGENT_GEMINI_API_KEY` |
+| Job env var | `ANTHROPIC_API_KEY` (or `REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY` when fallback next to Claude subscription) | `CLAUDE_CODE_OAUTH_TOKEN` | `CURSOR_API_KEY` | `GEMINI_API_KEY` |
+| Acquire | Paste Console key | `claude setup-token` (browser); 1-year token | Paste Dashboard / service-account key | Paste Google AI Studio key |
+| Local cache | `~/.config/revieweragent/credentials.json` (`0600`) in v1; OS keychain in v2 (§11.1). **v2 file shape is a map keyed `{provider}:{auth}`** so Claude, Cursor, and Gemini can all be cached. | same | same | same |
 
 Shared rules:
 
@@ -1599,11 +1626,11 @@ ship in v1, v2, or v3. A row appearing here does not mean it is in the first rel
 | Area | Decision |
 |---|---|
 | **v1 scope** | `init` + `review` + `uninstall`; advisory **and** gate; manual branch protection; no `merge_group`. See §0 |
-| **v2 scope** | `upgrade`, `rotate-secret`, `apply-protection`; Cursor Agent row (§3 / §8); CODEOWNERS write; `merge_group` check reuse; OS keychain (§11.1). See §0 |
-| **v3 scope** | Undesigned. Other git hosts, Copilot/OpenAI/Gemini, org-wide rollout, dashboard, multi-provider. See §18 |
+| **v2 scope** | `upgrade`, `rotate-secret`, `apply-protection`; Cursor Agent row (§3 / §8); **Gemini Model (`api-key`)**; optional different-method fallback on 429 / subscription quota; CODEOWNERS write; `merge_group` check reuse; OS keychain (§11.1). See §0 |
+| **v3 scope** | Undesigned. Other git hosts, Copilot/OpenAI, org-wide rollout, dashboard, multi-primary. See §18 |
 | Name | `revieweragent`, npm |
 | Platforms | **v1/v2:** github.com and GitHub Enterprise Cloud. **Not** GHE Server. GitLab, Bitbucket, Azure DevOps **v3**. Generated workflow is `ubuntu-latest` only. Platform port from day one |
-| Provider | Registry-driven; v1 live row = Claude; v2 live Agent row = Cursor (`provider: cursor`, `auth: subscription` only); one active provider per repo. Re-init switches provider (rewrites workflow). `upgrade` does not |
+| Provider | Registry-driven; v1 live row = Claude; v2 live Agent row = Cursor (`provider: cursor`, `auth: subscription` only); v2 live Model row = Gemini (`provider: gemini`, `auth: api-key` only); one **primary** provider per repo plus optional different-method `fallback`. Re-init switches provider (rewrites workflow). `upgrade` does not change provider; it **must** emit fallback env when config has `fallback` |
 | Setup prompt | **Agent or Model?** then registry-filtered provider list |
 | Auth | Agent → `subscription`; Model → `api-key` |
 | Subscription token | Claude: `claude setup-token`, ~1 year, CI via Claude Code CLI, no tools. Cursor: Dashboard / service-account **API key**, CI via `agent --mode ask`, empty workspace + isolated `HOME`, no `--force` |
@@ -1612,7 +1639,7 @@ ship in v1, v2, or v3. A row appearing here does not mean it is in the first rel
 | Model pinning | Mandatory. Unpinned defaults to Opus + 75k-token discovery overhead = ~18x cost (§8) |
 | CLI result parsing | Use `structured_output`; never branch on `subtype`. `is_error` + 401/403 → fail-closed; 429/5xx → availability skip. **400 quota splits by `auth`** (§8) |
 | Local credential cache | v1: optional plaintext `0600` `{auth,value}`. **v2:** map keyed `{provider}:{auth}`, OS keychain with file fallback (§11.1). Separate from Actions secret |
-| Secret names | Claude: `REVIEWERAGENT_ANTHROPIC_API_KEY` or `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`. Cursor: `REVIEWERAGENT_CURSOR_API_KEY` → job `CURSOR_API_KEY` |
+| Secret names | Claude: `REVIEWERAGENT_ANTHROPIC_API_KEY` or `REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`. Cursor: `REVIEWERAGENT_CURSOR_API_KEY` → job `CURSOR_API_KEY`. Gemini: `REVIEWERAGENT_GEMINI_API_KEY` → job `GEMINI_API_KEY`. Claude api-key fallback next to Claude subscription uses job `REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY` |
 | Workflow | Marker-owned; SHA-pinned **public** `owner/repo/actions/review@sha` — **not** `npx` per event. `run-name: revieweragent <pr-head-sha>` for fork-cap SHA lookup |
 | Job id vs check name | Workflow job id/`name:` is `revieweragent-run`; Checks API name stays `revieweragent`. Deliberately different — corrected after live testing found GitHub blocks `GITHUB_TOKEN` from updating a check that shares its name with the running job (§7, §9) |
 | `GITHUB_TOKEN` | Review step's `env:` must set it explicitly (`${{ secrets.GITHUB_TOKEN }}`) — not auto-injected into a JS action's `process.env` — corrected after live testing (§7) |
@@ -1638,8 +1665,8 @@ ship in v1, v2, or v3. A row appearing here does not mean it is in the first rel
 | Check conclusions | `success` or `failure` only — **no `neutral`** |
 | Model output | Findings JSON schema; **no** verdict field honored |
 | Evaluator | Deterministic, from `block_severity` |
-| Fail-closed | Missing secret, 401/403, **`api-key` 400 credit/billing** (persistent, operator-only), invalid JSON (no quota signal), over-limit, BLOCK findings, spawn `E2BIG` |
-| Availability skip | 429, **`subscription` plan-quota 400** (outsider-burnable, refills), 5xx overload, Claude CLI npm install failure — `success` + `Review skipped:` |
+| Fail-closed | Missing secret, 401/403, **`api-key` 400 credit/billing** (persistent, operator-only), invalid JSON (no quota signal), over-limit, BLOCK findings, spawn `E2BIG`, **opt-in fallback dual-quota / missing fallback secret / unusable fallback CLI** |
+| Availability skip | 429 and **`subscription` plan-quota 400** when **no fallback** (or the error is not a fallback trigger), 5xx overload, Claude CLI npm install failure — `success` + `Review skipped:` |
 | Skip vs closed test | Outsider can cause it **and** it ends on its own → skip. Either false → fail closed (§9) |
 | `on_limit` | Advisory only; **gate always blocks** on over-limit |
 | Diff limits | `max_diff_lines` / `max_prompt_tokens` + default excludes. Do not silently truncate |
@@ -1667,7 +1694,8 @@ not implementing something already decided.
 Agent row (§3 / §8).
 
 - Light up remaining registry rows: GitHub Copilot (distinct auth path),
-  OpenAI, Gemini. Still one active provider per repo until a later decision.
+  OpenAI. Still one primary provider per repo until a later decision.
+  Gemini Model (`api-key`) is live; optional fallback is not multi-primary.
 - GitLab, Bitbucket, Azure DevOps implementations of the platform port.
 - Monorepo subdirectory scoping (path include filters beyond `exclude`).
 - Org-wide / batch rollout (`--org` loop).

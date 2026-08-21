@@ -17,13 +17,20 @@ program.name("revieweragent").description("Wire automatic AI PR review into a gi
 program
   .command("init")
   .description("Install into the current repo")
-  .option("--provider <provider>", "AI provider (claude | cursor)", "claude")
+  .option("--provider <provider>", "AI provider (claude | cursor | gemini)", "claude")
   .option("--auth <auth>", "subscription | api-key")
   .option("--mode <mode>", "advisory | gate", "advisory")
   .option("--severity <severity>", "block severity threshold for gate mode", "high")
   .option("--oauth-token <token>", "Claude Code OAuth token (subscription auth)")
   .option("--api-key <key>", "Anthropic Console API key (api-key auth)")
   .option("--cursor-api-key <key>", "Cursor Dashboard / service-account API key")
+  .option("--gemini-api-key <key>", "Google AI Studio Gemini API key")
+  .option("--fallback-provider <provider>", "Optional fallback provider (claude | cursor | gemini)")
+  .option("--fallback-auth <auth>", "Fallback auth (subscription | api-key)")
+  .option("--fallback-oauth-token <token>", "Fallback Claude Code OAuth token")
+  .option("--fallback-api-key <key>", "Fallback Anthropic Console API key")
+  .option("--fallback-cursor-api-key <key>", "Fallback Cursor API key")
+  .option("--fallback-gemini-api-key <key>", "Fallback Gemini API key")
   .option("--codeowners <user>", "Write a managed CODEOWNERS block for @USER")
   .option("--no-codeowners", "Skip writing CODEOWNERS (non-interactive default)")
   .option("--no-keychain", "Force the plaintext 0600 credential file instead of the OS keychain")
@@ -40,6 +47,13 @@ program
       oauthToken: opts.oauthToken,
       apiKey: opts.apiKey,
       cursorApiKey: opts.cursorApiKey,
+      geminiApiKey: opts.geminiApiKey,
+      fallbackProvider: opts.fallbackProvider,
+      fallbackAuth: opts.fallbackAuth,
+      fallbackOauthToken: opts.fallbackOauthToken,
+      fallbackApiKey: opts.fallbackApiKey,
+      fallbackCursorApiKey: opts.fallbackCursorApiKey,
+      fallbackGeminiApiKey: opts.fallbackGeminiApiKey,
       codeowners: typeof opts.codeowners === "string" ? opts.codeowners : undefined,
       noCodeowners: opts.codeowners === false,
       noKeychain: opts.keychain === false,
@@ -80,6 +94,8 @@ program
   .option("--oauth-token <token>", "New Claude Code OAuth token")
   .option("--api-key <key>", "New Anthropic Console API key")
   .option("--cursor-api-key <key>", "New Cursor Dashboard / service-account API key")
+  .option("--gemini-api-key <key>", "New Google AI Studio Gemini API key")
+  .option("--fallback", "Rotate the fallback credential instead of primary", false)
   .option("--update-cache", "Also update the local credential cache", false)
   .option("--no-keychain", "Force the plaintext 0600 credential file instead of the OS keychain")
   .option("--non-interactive", "Run without prompts; requires --yes", !process.stdin.isTTY)
@@ -90,6 +106,8 @@ program
       oauthToken: opts.oauthToken,
       apiKey: opts.apiKey,
       cursorApiKey: opts.cursorApiKey,
+      geminiApiKey: opts.geminiApiKey,
+      fallback: opts.fallback,
       updateCache: opts.updateCache,
       noKeychain: opts.keychain === false,
     });

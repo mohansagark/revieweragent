@@ -38,4 +38,68 @@ describe("parseNonInteractiveOptions (v2)", () => {
       }).writeCodeowners,
     ).toBe(false);
   });
+
+  it("accepts Gemini primary via --gemini-api-key and does not require sk-ant", () => {
+    expect(
+      parseNonInteractiveOptions({
+        provider: "gemini",
+        auth: "api-key",
+        geminiApiKey: "AIza-test-key",
+      }),
+    ).toMatchObject({
+      provider: "gemini",
+      auth: "api-key",
+      credential: "AIza-test-key",
+    });
+  });
+
+  it("rejects a Gemini key passed through --api-key", () => {
+    expect(() =>
+      parseNonInteractiveOptions({
+        provider: "gemini",
+        auth: "api-key",
+        apiKey: "AIza-test-key",
+      }),
+    ).toThrow(MissingInputError);
+  });
+
+  it("accepts Claude subscription plus Gemini fallback flags", () => {
+    expect(
+      parseNonInteractiveOptions({
+        provider: "claude",
+        auth: "subscription",
+        oauthToken: "oauth-test-token-not-real",
+        fallbackProvider: "gemini",
+        fallbackGeminiApiKey: "AIza-test-key",
+      }).fallback,
+    ).toEqual({
+      provider: "gemini",
+      auth: "api-key",
+      credential: "AIza-test-key",
+    });
+  });
+
+  it("rejects fallback flags without --fallback-provider", () => {
+    expect(() =>
+      parseNonInteractiveOptions({
+        provider: "claude",
+        auth: "subscription",
+        oauthToken: "oauth-test-token-not-real",
+        fallbackGeminiApiKey: "AIza-test-key",
+      }),
+    ).toThrow(MissingInputError);
+  });
+
+  it("rejects the same method as fallback", () => {
+    expect(() =>
+      parseNonInteractiveOptions({
+        provider: "claude",
+        auth: "subscription",
+        oauthToken: "oauth-test-token-not-real",
+        fallbackProvider: "claude",
+        fallbackAuth: "subscription",
+        fallbackOauthToken: "other-oauth-token-not-real",
+      }),
+    ).toThrow(MissingInputError);
+  });
 });
