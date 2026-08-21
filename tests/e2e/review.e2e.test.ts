@@ -587,4 +587,48 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     expect(github.checks[0]?.output?.summary).not.toMatch(/mix credentials/);
     expect(githubState.subscription).toHaveBeenCalledOnce();
   });
+
+  it("fail-closes when fallback is set but the fallback secret is empty", async () => {
+    const github = await setup({
+      config: {
+        mode: "gate",
+        auth: "subscription",
+        fallback: { provider: "gemini", auth: "api-key" },
+      },
+      extraEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-test-token-not-real",
+        GEMINI_API_KEY: "   ",
+      },
+    });
+    githubState.subscription.mockRejectedValue(
+      new ModelBackendError("Claude Code rate limited", { kind: "http_429" }),
+    );
+    await expect(runReview()).resolves.toBe(1);
+    expect(githubState.gemini).not.toHaveBeenCalled();
+    expect(github.checks[0]?.conclusion).toBe("failure");
+    expect(github.checks[0]?.output?.summary).toMatch(/Fallback provider secret is missing/);
+  });
+
+  it("fail-closes when fallback Claude CLI install failed after a primary 429", async () => {
+    const github = await setup({
+      config: {
+        mode: "gate",
+        provider: "gemini",
+        auth: "api-key",
+        fallback: { provider: "claude", auth: "subscription" },
+      },
+      extraEnv: {
+        GEMINI_API_KEY: "AIza-test-key",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-test-token-not-real",
+        REVIEWERAGENT_CLI_INSTALL_FAILED: "true",
+      },
+    });
+    githubState.gemini.mockRejectedValue(
+      new ModelBackendError("Gemini generateContent returned HTTP 429", { kind: "http_429" }),
+    );
+    await expect(runReview()).resolves.toBe(1);
+    expect(githubState.subscription).not.toHaveBeenCalled();
+    expect(github.checks[0]?.conclusion).toBe("failure");
+    expect(github.checks[0]?.output?.summary).toMatch(/Fallback provider CLI failed to install/);
+  });
 });

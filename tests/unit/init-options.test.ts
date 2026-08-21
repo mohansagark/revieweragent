@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MissingInputError, parseNonInteractiveOptions } from "../../src/cli/init.js";
+import { MissingInputError, parseNonInteractiveOptions, fallbackConfirmInitialValue } from "../../src/cli/init.js";
 
 describe("parseNonInteractiveOptions (v2)", () => {
   it("accepts Cursor subscription via --cursor-api-key", () => {
@@ -101,5 +101,12 @@ describe("parseNonInteractiveOptions (v2)", () => {
         fallbackOauthToken: "other-oauth-token-not-real",
       }),
     ).toThrow(MissingInputError);
+  });
+});
+
+describe("fallbackConfirmInitialValue", () => {
+  it("defaults yes only when config already has fallback", () => {
+    expect(fallbackConfirmInitialValue(undefined)).toBe(false);
+    expect(fallbackConfirmInitialValue({ fallback: { provider: "gemini", auth: "api-key" } } as never)).toBe(true);
   });
 });

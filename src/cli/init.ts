@@ -19,7 +19,7 @@ import {
   BLOCK_SEVERITY_VALUES,
 } from "../core/config-schema.js";
 import { loadPersistedCredential, persistCachedCredential } from "../core/credential-cache.js";
-import { secretNameFor, unusedSecretNames } from "../core/secret-names.js";
+import { secretNameFor, unusedSecretNames, methodNeedsClaudeCli } from "../core/secret-names.js";
 import {
   requiredDependenciesFor,
   runFixCommand,
@@ -27,6 +27,7 @@ import {
   checkGitRepo,
   checkGhCli,
   checkGhAuthenticated,
+  checkClaudeCli,
   shouldPromptGhLogin,
 } from "./dependency-checks.js";
 import { runSetupToken } from "../provider/claude/setup-token.js";
@@ -195,6 +196,10 @@ export function parseNonInteractiveOptions(argv: NonInteractiveInitArgv): InitOp
     codeownersUser: argv.codeowners,
     noKeychain: Boolean(argv.noKeychain),
   };
+}
+
+export function fallbackConfirmInitialValue(existing?: RevieweragentConfig): boolean {
+  return Boolean(existing?.fallback);
 }
 
 function tryExistingConfig(): RevieweragentConfig | undefined {
@@ -377,6 +382,31 @@ async function promptForInitOptions(): Promise<InitOptions> {
     if (!p.isCancel(sev)) severity = sev;
   }
 
+  const existing = tryExistingConfig();
+  const wantFallback = await p.confirm({
+    message: "Configure a fallback provider?",
+    initialValue: fallbackConfirmInitialValue(existing),
+  });
+  let fallback: InitFallback | undefined;
+  if (!p.isCancel(wantFallback) && wantFallback) {
+    const fb = await promptCategoryProviderCredential({
+      omit: { provider: primary.provider, auth: primary.auth },
+    });
+    fallback = fb;
+    fallbackFreezeNote();
+    if (methodNeedsClaudeCli(fb.provider, fb.auth)) {
+      const dep = checkClaudeCli();
+      if (!dep.present) {
+        const proceed = await p.confirm({
+          message: `${dep.name} is missing. Run \`${dep.fixCommand}\`?`,
+        });
+        if (!p.isCancel(proceed) && proceed && dep.fixCommand) {
+          runFixCommand(dep.fixCommand);
+        }
+      }
+    }
+  }
+
   const writeCo = await p.confirm({
     message: "Write a managed CODEOWNERS block for revieweragent files?",
     initialValue: true,
@@ -388,20 +418,6 @@ async function promptForInitOptions(): Promise<InitOptions> {
   if (doCommit) {
     const push = await p.confirm({ message: "Push that commit too?", initialValue: false });
     doPush = !p.isCancel(push) && push;
-  }
-
-  const existing = tryExistingConfig();
-  const wantFallback = await p.confirm({
-    message: "Configure a fallback provider?",
-    initialValue: Boolean(existing?.fallback),
-  });
-  let fallback: InitFallback | undefined;
-  if (!p.isCancel(wantFallback) && wantFallback) {
-    const fb = await promptCategoryProviderCredential({
-      omit: { provider: primary.provider, auth: primary.auth },
-    });
-    fallback = fb;
-    fallbackFreezeNote();
   }
 
   return {

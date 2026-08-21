@@ -298,6 +298,16 @@ async function handlePrimaryBackendError(
     };
   }
   if (!(err instanceof ModelBackendError)) throw err;
+  if (err.classifiable.kind === "e2big") {
+    return {
+      done: true,
+      code: await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit.",
+      ),
+    };
+  }
 
   if (isFallbackTrigger(err.classifiable) && config.fallback) {
     const fb = config.fallback;
@@ -332,6 +342,16 @@ async function handlePrimaryBackendError(
       return { done: false, rawOutput, usedFallback: fb.provider };
     } catch (fbErr) {
       if ((fbErr as NodeJS.ErrnoException).code === "E2BIG") {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Prompt exceeded the OS argument size limit.",
+          ),
+        };
+      }
+      if (fbErr instanceof ModelBackendError && fbErr.classifiable.kind === "e2big") {
         return {
           done: true,
           code: await publishWithProgress(

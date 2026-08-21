@@ -13940,15 +13940,15 @@ ${userPayload}`;
 }
 
 // src/provider/gemini/api-key.ts
-var DEFAULT_MODEL2 = process.env.GEMINI_MODEL ?? "gemini-3.7-flash";
+var DEFAULT_MODEL2 = "gemini-3.7-flash";
 var GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 async function callGeminiBackend(systemPrompt, userPayload, apiKey = process.env.GEMINI_API_KEY) {
   const key = presentSecret(apiKey);
   if (!key) {
     throw new ModelBackendError("GEMINI_API_KEY is not set", { kind: "missing_secret" });
   }
-  const model = DEFAULT_MODEL2;
-  const url = `${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const model = process.env.GEMINI_MODEL ?? DEFAULT_MODEL2;
+  const url = `${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent`;
   const system = `${systemPrompt}
 
 Findings JSON schema:
@@ -13957,14 +13957,16 @@ ${JSON.stringify(FINDINGS_JSON_SCHEMA)}`;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": key
+      },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: "user", parts: [{ text: userPayload }] }],
         generationConfig: {
           temperature: 0,
-          maxOutputTokens: 4096,
-          responseMimeType: "application/json"
+          maxOutputTokens: 4096
         }
       })
     });
@@ -13997,8 +13999,9 @@ ${JSON.stringify(FINDINGS_JSON_SCHEMA)}`;
 }
 function classifyGeminiHttp(status, bodyText) {
   const lower = bodyText.toLowerCase();
-  const exhausted = /resource_exhausted/.test(lower) || (status === 429 || status === 403) && /quota|rate.?limit|exceeded/.test(lower);
-  if (status === 429 || exhausted) return { kind: "http_429" };
+  if (status === 429) return { kind: "http_429" };
+  const exhausted = /resource_exhausted|quota|rate.?limit|exceeded/.test(lower);
+  if (status === 403 && exhausted) return { kind: "http_429" };
   if (/api key not valid|invalid.?api.?key|api_key_invalid/.test(lower)) return { kind: "http_403" };
   if (status === 401) return { kind: "http_401" };
   if (status === 403) return { kind: "http_403" };
@@ -14413,6 +14416,16 @@ async function handlePrimaryBackendError(err, config, publishWithProgress, syste
     };
   }
   if (!(err instanceof ModelBackendError)) throw err;
+  if (err.classifiable.kind === "e2big") {
+    return {
+      done: true,
+      code: await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit."
+      )
+    };
+  }
   if (isFallbackTrigger(err.classifiable) && config.fallback) {
     const fb = config.fallback;
     if (!credentialValueFor(fb.provider, fb.auth, "fallback")) {
@@ -14446,6 +14459,16 @@ async function handlePrimaryBackendError(err, config, publishWithProgress, syste
       return { done: false, rawOutput, usedFallback: fb.provider };
     } catch (fbErr) {
       if (fbErr.code === "E2BIG") {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Prompt exceeded the OS argument size limit."
+          )
+        };
+      }
+      if (fbErr instanceof ModelBackendError && fbErr.classifiable.kind === "e2big") {
         return {
           done: true,
           code: await publishWithProgress(

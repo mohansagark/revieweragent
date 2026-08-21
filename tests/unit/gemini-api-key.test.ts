@@ -11,6 +11,13 @@ describe("classifyGeminiHttp", () => {
     });
   });
 
+  it("does not treat HTTP 400 RESOURCE_EXHAUSTED as a 429 trigger", () => {
+    expect(classifyGeminiHttp(400, '{"error":{"status":"RESOURCE_EXHAUSTED"}}')).toEqual({
+      kind: "http_400",
+      auth: "api-key",
+    });
+  });
+
   it("maps an invalid API key to http_403", () => {
     expect(classifyGeminiHttp(400, "API key not valid. Please pass a valid API key.")).toEqual({ kind: "http_403" });
     expect(classifyGeminiHttp(403, '{"error":{"status":"PERMISSION_DENIED"}}')).toEqual({ kind: "http_403" });
@@ -38,10 +45,15 @@ describe("callGeminiBackend", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     await callGeminiBackend("You are a reviewer.", "diff", "AIza-test-key");
-    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as {
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).not.toMatch(/key=/);
+    expect((init as RequestInit).headers).toMatchObject({ "x-goog-api-key": "AIza-test-key" });
+    const body = JSON.parse((init as RequestInit).body as string) as {
       systemInstruction: { parts: { text: string }[] };
+      generationConfig: { responseMimeType?: string };
     };
     expect(body.systemInstruction.parts[0]!.text).toContain(JSON.stringify(FINDINGS_JSON_SCHEMA));
+    expect(body.generationConfig.responseMimeType).toBeUndefined();
   });
 
   it("classifies RESOURCE_EXHAUSTED as a ModelBackendError http_429", async () => {
