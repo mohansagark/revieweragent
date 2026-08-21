@@ -26,7 +26,7 @@ export interface NamedCachedCredential extends CachedCredential {
 
 type CacheMap = Record<string, { value: string }>;
 
-const KEYCHAIN_ACCOUNTS = ["claude:subscription", "claude:api-key", "cursor:subscription"] as const;
+const KEYCHAIN_ACCOUNTS = ["claude:subscription", "claude:api-key", "cursor:subscription", "gemini:api-key"] as const;
 
 export function cacheKey(provider: ProviderId, auth: AuthType): string {
   return `${provider}:${auth}`;

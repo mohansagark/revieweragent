@@ -4,8 +4,11 @@ Source: `SPEC.md` §7. Loaded from the **base branch** only, never PR head.
 
 ```yaml
 version: 1                  # required; unrecognized -> fail job (gate: fail-closed, advisory: error review)
-provider: claude             # v1: only "claude"
+provider: claude             # claude | cursor | gemini
 auth: subscription           # subscription | api-key — must match the live repo secret
+# fallback:                  # optional different-method retry on 429 / subscription quota
+#   provider: gemini
+#   auth: api-key
 mode: advisory                # advisory | gate
 block_severity: high         # any | critical | high | medium | low
 max_diff_lines: 4000

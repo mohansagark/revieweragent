@@ -51,6 +51,14 @@ opt-in for requiring the `revieweragent` check on classic branch protection.
 
 ## Shipped (say this)
 
+### 2026-08-21 — Gemini Model + optional fallback (in-tree; next npm after pin)
+
+- **Gemini as a Model.** Google AI Studio API key, `gemini-3.7-flash` in CI.
+  Same findings schema as Claude. Not the default — Claude subscription still is.
+- **Optional fallback provider.** After primary 429 or Claude subscription
+  plan-quota, a *different* method can retry. Dual-quota fails closed. Leave it
+  off to keep skip-and-pass.
+
 ### 2026-08-21 — technical v2 (`npx revieweragent@1.2.0`)
 
 - **Cursor as a second Agent.** Dashboard or service-account API key, ask-mode

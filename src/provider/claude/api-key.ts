@@ -1,4 +1,5 @@
 import { FINDINGS_JSON_SCHEMA } from "../../core/findings-schema.js";
+import { presentSecret } from "../../core/present-secret.js";
 import type { ClassifiableError } from "../../core/error-classifier.js";
 import { ModelBackendError } from "./subscription.js";
 
@@ -18,7 +19,8 @@ export async function callApiKeyBackend(
   userPayload: string,
   apiKey = process.env.ANTHROPIC_API_KEY,
 ): Promise<string> {
-  if (!apiKey) {
+  const key = presentSecret(apiKey);
+  if (!key) {
     throw new ModelBackendError("ANTHROPIC_API_KEY is not set", { kind: "missing_secret" });
   }
 
@@ -28,7 +30,7 @@ export async function callApiKeyBackend(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-api-key": apiKey,
+        "x-api-key": key,
         "anthropic-version": ANTHROPIC_VERSION,
       },
       body: JSON.stringify({

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { FINDINGS_JSON_SCHEMA } from "../../core/findings-schema.js";
+import { presentSecret } from "../../core/present-secret.js";
 import type { ClassifiableError } from "../../core/error-classifier.js";
 
 // SPEC.md §8's verified argv — every flag here is load-bearing (§8
@@ -51,7 +52,7 @@ export function callSubscriptionBackend(
   userPayload: string,
   claudeBin = "claude",
 ): Promise<string> {
-  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (!presentSecret(process.env.CLAUDE_CODE_OAUTH_TOKEN)) {
     return Promise.reject(
       new ModelBackendError("CLAUDE_CODE_OAUTH_TOKEN is not set", { kind: "missing_secret" }),
     );

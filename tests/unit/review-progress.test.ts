@@ -56,4 +56,11 @@ describe("review progress comments", () => {
     expect(formatReviewCompleteComment("availability-skip", "HTTP 429 quota xyz")).toContain("**Verdict: SKIPPED**");
     expect(formatReviewCompleteComment("availability-skip", "HTTP 429 quota xyz")).not.toContain("HTTP 429");
   });
+
+  it("mentions fallback on PASS/BLOCK public comments", () => {
+    expect(formatReviewCompleteComment("PASS", "Looks good", { fallback: "gemini" })).toContain("fallback: gemini");
+    expect(formatReviewCompleteComment("fail-closed-infra", "rate limited", { fallback: "gemini" })).not.toContain(
+      "fallback:",
+    );
+  });
 });

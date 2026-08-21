@@ -3,14 +3,19 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelBackendError } from "../claude/subscription.js";
+import { presentSecret } from "../../core/present-secret.js";
 import {
   buildCursorAgentArgv,
   classifyCursorSpawnError,
   parseCursorEnvelope,
 } from "./agent.js";
 
-function installFailed(): boolean {
-  return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
+export function cursorCliInstallFailed(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.REVIEWERAGENT_CURSOR_CLI_INSTALL_FAILED !== undefined) {
+    return env.REVIEWERAGENT_CURSOR_CLI_INSTALL_FAILED === "true";
+  }
+  if (presentSecret(env.CLAUDE_CODE_OAUTH_TOKEN)) return false;
+  return env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
 }
 
 export function callCursorBackend(
@@ -18,7 +23,7 @@ export function callCursorBackend(
   userPayload: string,
   agentBin = process.env.REVIEWERAGENT_CURSOR_BIN ?? "agent",
 ): Promise<string> {
-  if (!process.env.CURSOR_API_KEY) {
+  if (!presentSecret(process.env.CURSOR_API_KEY)) {
     return Promise.reject(new ModelBackendError("CURSOR_API_KEY is not set", { kind: "missing_secret" }));
   }
 
@@ -46,7 +51,7 @@ export function callCursorBackend(
       reject(
         new ModelBackendError(
           `Failed to spawn Cursor agent: ${(err as Error).message}`,
-          classifyCursorSpawnError(err as NodeJS.ErrnoException, installFailed()),
+          classifyCursorSpawnError(err as NodeJS.ErrnoException, cursorCliInstallFailed()),
         ),
       );
       return;
@@ -59,7 +64,7 @@ export function callCursorBackend(
       reject(
         new ModelBackendError(
           `Failed to spawn Cursor agent: ${err.message}`,
-          classifyCursorSpawnError(err, installFailed()),
+          classifyCursorSpawnError(err, cursorCliInstallFailed()),
         ),
       );
     });

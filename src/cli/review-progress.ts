@@ -48,7 +48,11 @@ export function formatReviewStartComment(): string {
   return `${REVIEW_START_COMMENT}\n\n${REVIEW_START_MARKER}`;
 }
 
-export function formatReviewCompleteComment(kind: CheckOutcomeKind, summary?: string): string {
+export function formatReviewCompleteComment(
+  kind: CheckOutcomeKind,
+  summary?: string,
+  opts?: { fallback?: string },
+): string {
   const verdict = verdictFor(kind);
   const details = publicProgressDetails(kind, summary);
   const lines = [
@@ -58,6 +62,9 @@ export function formatReviewCompleteComment(kind: CheckOutcomeKind, summary?: st
   ];
   if (details) {
     lines.push("", details);
+  }
+  if (opts?.fallback && (kind === "PASS" || kind === "BLOCK")) {
+    lines.push("", `fallback: ${opts.fallback}`);
   }
   lines.push("", REVIEW_COMPLETE_MARKER);
   return lines.join("\n");

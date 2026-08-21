@@ -1,8 +1,10 @@
+import type { AuthType, ProviderId } from "../core/config-schema.js";
 import { claudeProvider } from "./claude/registry-entry.js";
 import { cursorProvider } from "./cursor/registry-entry.js";
+import { geminiProvider } from "./gemini/registry-entry.js";
 
-// SPEC.md §3 — registry-driven provider list. v1 live row: Claude.
-// v2 lights up Cursor (Agent, subscription-oauth category, CURSOR_API_KEY).
+// SPEC.md §3 — registry-driven provider list. Live: Claude, Cursor (Agent),
+// Gemini (Model). OpenAI / Copilot stay undesigned.
 
 export type AuthMethodType = "subscription-oauth" | "api-key";
 
@@ -24,7 +26,7 @@ export interface Provider {
 
 export type PromptCategory = "Agent" | "Model";
 
-export const providerRegistry: Provider[] = [claudeProvider, cursorProvider];
+export const providerRegistry: Provider[] = [claudeProvider, cursorProvider, geminiProvider];
 
 const categoryToAuthType: Record<PromptCategory, AuthMethodType> = {
   Agent: "subscription-oauth",
@@ -34,9 +36,19 @@ const categoryToAuthType: Record<PromptCategory, AuthMethodType> = {
 export function listProvidersForCategory(
   registry: Provider[],
   category: PromptCategory,
+  omit?: { provider: ProviderId; auth: AuthType },
 ): Provider[] {
   const authType = categoryToAuthType[category];
+  const omitAuthType: AuthMethodType | undefined = omit
+    ? omit.auth === "api-key"
+      ? "api-key"
+      : "subscription-oauth"
+    : undefined;
   return registry
     .filter((p) => p.status === "live")
-    .filter((p) => p.authMethods.some((m) => m.type === authType));
+    .filter((p) => p.authMethods.some((m) => m.type === authType))
+    .filter((p) => {
+      if (!omit || omitAuthType !== authType) return true;
+      return p.id !== omit.provider;
+    });
 }

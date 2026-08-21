@@ -9,8 +9,10 @@ npx revieweragent init
 ```
 
 Supports **Claude subscription** (Claude Code OAuth token from `claude setup-token`),
-**Anthropic API key**, and **Cursor** (Dashboard / service-account API key, Agent
-ask-mode). Claude subscription is the default.
+**Anthropic API key**, **Gemini** (Google AI Studio API key), and **Cursor**
+(Dashboard / service-account API key, Agent ask-mode). Claude subscription is
+the default. Init can optionally configure a **fallback** provider that runs
+only when the primary hits HTTP 429 or Claude subscription plan-quota.
 
 Marketing copy for a future public launch lives in [`RELEASE_NOTES.md`](./RELEASE_NOTES.md).
 That file is a living list, not a promise that we have launched.
@@ -21,6 +23,7 @@ That file is a living list, not a promise that we have launched.
 - GitHub CLI (`gh`) authenticated to the repo you want to install into
 - For Claude subscription: Claude Code CLI, with `claude setup-token` already run
 - For Claude api-key: an Anthropic API key
+- For Gemini: a Google AI Studio API key (`https://aistudio.google.com/apikey`)
 - For Cursor: a Cursor Dashboard or team service-account API key. Init does not
   install the `agent` CLI; CI downloads a checksum-pinned tarball.
 
@@ -39,7 +42,8 @@ That writes:
 - `.revieweragent.yml` — repo config (commit this)
 - `.github/workflows/revieweragent.yml` — the review workflow (committed)
 - A GitHub Actions secret (`REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN`,
-  `REVIEWERAGENT_ANTHROPIC_API_KEY`, or `REVIEWERAGENT_CURSOR_API_KEY`)
+  `REVIEWERAGENT_ANTHROPIC_API_KEY`, `REVIEWERAGENT_GEMINI_API_KEY`, or
+  `REVIEWERAGENT_CURSOR_API_KEY`)
 - A managed `CODEOWNERS` block when you pass `--codeowners @USER` (skipped by
   default in non-interactive mode)
 
@@ -50,8 +54,10 @@ Then commit and push those files. Later PRs get a review automatically.
 ### Auth
 
 `init` tries Claude subscription first (`claude setup-token` output). Pass `--auth api-key`
-to use `ANTHROPIC_API_KEY`, or `--provider cursor --auth subscription --cursor-api-key …`
-for Cursor. Cursor has no Model / Console API-key path.
+to use `ANTHROPIC_API_KEY`, `--provider gemini --auth api-key --gemini-api-key …` for
+Gemini, or `--provider cursor --auth subscription --cursor-api-key …` for Cursor.
+Optional fallback: `--fallback-provider gemini --fallback-gemini-api-key …`. Cursor has
+no Model / Console API-key path. Gemini has no subscription path.
 
 ### Advisory vs gate
 

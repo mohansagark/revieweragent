@@ -11091,6 +11091,15 @@ function createGitHubReviewPort(octokit, owner, repo) {
   };
 }
 
+// src/core/secret-names.ts
+var FALLBACK_ANTHROPIC_JOB_ENV = "REVIEWERAGENT_FALLBACK_ANTHROPIC_API_KEY";
+function methodNeedsClaudeCli(provider, auth2) {
+  return provider === "claude" && auth2 === "subscription";
+}
+function methodNeedsCursorCli(provider) {
+  return provider === "cursor";
+}
+
 // src/provider/claude/subscription.ts
 import { spawn } from "node:child_process";
 
@@ -11189,6 +11198,12 @@ function parseFindings(rawModelOutput) {
   return { summary: obj.summary, findings };
 }
 
+// src/core/present-secret.ts
+function presentSecret(value) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : void 0;
+}
+
 // src/provider/claude/subscription.ts
 var ModelBackendError = class extends Error {
   constructor(message, classifiable) {
@@ -11198,9 +11213,9 @@ var ModelBackendError = class extends Error {
   }
   classifiable;
 };
-function classifyCliSpawnError(err, installFailed2) {
+function classifyCliSpawnError(err, installFailed) {
   if (err.code === "E2BIG" || /\bE2BIG\b/i.test(err.message ?? "")) return { kind: "e2big" };
-  if (installFailed2) return { kind: "npm_fetch_fail_cache_miss" };
+  if (installFailed) return { kind: "npm_fetch_fail_cache_miss" };
   return { kind: "cli_missing" };
 }
 function isSubscriptionQuotaMessage(text) {
@@ -11211,7 +11226,7 @@ function cliInstallFailed() {
   return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
 }
 function callSubscriptionBackend(systemPrompt, userPayload, claudeBin = "claude") {
-  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (!presentSecret(process.env.CLAUDE_CODE_OAUTH_TOKEN)) {
     return Promise.reject(
       new ModelBackendError("CLAUDE_CODE_OAUTH_TOKEN is not set", { kind: "missing_secret" })
     );
@@ -11330,9 +11345,9 @@ function buildCursorAgentArgv(opts) {
     opts.prompt
   ];
 }
-function classifyCursorSpawnError(err, installFailed2) {
+function classifyCursorSpawnError(err, installFailed) {
   if (err.code === "E2BIG") return { kind: "e2big" };
-  if (installFailed2) return { kind: "npm_fetch_fail_cache_miss" };
+  if (installFailed) return { kind: "npm_fetch_fail_cache_miss" };
   return { kind: "cli_missing" };
 }
 function parseCursorEnvelope(stdout, exitCode, stderr) {
@@ -11518,6 +11533,7 @@ async function isUnderActorCap(octokit, owner, repo, actor, capPerHour) {
 // src/core/config-schema.ts
 var import_yaml = __toESM(require_dist(), 1);
 var CONFIG_SCHEMA_VERSION = 1;
+var LIVE_PROVIDERS = ["claude", "cursor", "gemini"];
 var BLOCK_SEVERITY_VALUES = [
   "any",
   "critical",
@@ -11590,18 +11606,40 @@ function parseConfig(raw) {
     throw new UnrecognizedConfigVersionError(obj.version);
   }
   const config = { ...defaultConfig(), ...obj };
+  if (config.fallback == null) {
+    delete config.fallback;
+  }
   validateConfig(config);
   return config;
 }
+function methodKey(provider, auth2) {
+  return `${provider}:${auth2}`;
+}
+function validateProviderAuth(provider, auth2, label) {
+  if (!LIVE_PROVIDERS.includes(provider)) {
+    throw new InvalidConfigError(`${label}unsupported provider "${String(provider)}"`);
+  }
+  if (auth2 !== "subscription" && auth2 !== "api-key") {
+    throw new InvalidConfigError(`${label}unsupported auth "${String(auth2)}"`);
+  }
+  if (provider === "cursor" && auth2 !== "subscription") {
+    throw new InvalidConfigError(`${label}provider "cursor" only supports auth: subscription`);
+  }
+  if (provider === "gemini" && auth2 !== "api-key") {
+    throw new InvalidConfigError(`${label}provider "gemini" only supports auth: api-key`);
+  }
+}
 function validateConfig(config) {
-  if (config.provider !== "claude" && config.provider !== "cursor") {
-    throw new InvalidConfigError(`unsupported provider "${String(config.provider)}"`);
-  }
-  if (config.auth !== "subscription" && config.auth !== "api-key") {
-    throw new InvalidConfigError(`unsupported auth "${String(config.auth)}"`);
-  }
-  if (config.provider === "cursor" && config.auth !== "subscription") {
-    throw new InvalidConfigError('provider "cursor" only supports auth: subscription');
+  validateProviderAuth(config.provider, config.auth, "");
+  if (config.fallback !== void 0) {
+    const fb = config.fallback;
+    if (typeof fb !== "object" || fb === null || !fb.provider || !fb.auth) {
+      throw new InvalidConfigError("fallback must include provider and auth");
+    }
+    validateProviderAuth(fb.provider, fb.auth, "fallback ");
+    if (methodKey(fb.provider, fb.auth) === methodKey(config.provider, config.auth)) {
+      throw new InvalidConfigError("fallback must use a different method than the primary provider");
+    }
   }
   if (config.mode !== "advisory" && config.mode !== "gate") {
     throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);
@@ -13781,6 +13819,237 @@ function evaluateGate(findings, blockSeverity) {
   return blocks ? "BLOCK" : "PASS";
 }
 
+// src/provider/claude/api-key.ts
+var DEFAULT_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+var ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+var ANTHROPIC_VERSION = "2023-06-01";
+async function callApiKeyBackend(systemPrompt, userPayload, apiKey = process.env.ANTHROPIC_API_KEY) {
+  const key = presentSecret(apiKey);
+  if (!key) {
+    throw new ModelBackendError("ANTHROPIC_API_KEY is not set", { kind: "missing_secret" });
+  }
+  let response;
+  try {
+    response = await fetch(ANTHROPIC_API_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": ANTHROPIC_VERSION
+      },
+      body: JSON.stringify({
+        model: DEFAULT_MODEL,
+        max_tokens: 4096,
+        system: `${systemPrompt}
+
+Findings JSON schema:
+${JSON.stringify(FINDINGS_JSON_SCHEMA)}`,
+        messages: [{ role: "user", content: userPayload }]
+      })
+    });
+  } catch (err) {
+    throw new ModelBackendError(`Network error calling Anthropic Messages API: ${err.message}`, {
+      kind: "http_5xx"
+    });
+  }
+  if (!response.ok) {
+    const classification = classifyHttpStatus(response.status);
+    throw new ModelBackendError(`Anthropic Messages API returned HTTP ${response.status}`, classification);
+  }
+  const body = await response.json();
+  const text = body.content?.find((block) => block.type === "text")?.text;
+  if (!text) {
+    throw new ModelBackendError("Anthropic Messages API response had no text content", { kind: "invalid_json" });
+  }
+  return text;
+}
+function classifyHttpStatus(status) {
+  if (status === 401) return { kind: "http_401" };
+  if (status === 403) return { kind: "http_403" };
+  if (status === 429) return { kind: "http_429" };
+  if (status === 400) return { kind: "http_400", auth: "api-key" };
+  if (status >= 500) return { kind: "http_5xx" };
+  return { kind: "invalid_json" };
+}
+
+// src/provider/cursor/backend.ts
+import { spawn as spawn2 } from "node:child_process";
+import { mkdtempSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+function cursorCliInstallFailed(env = process.env) {
+  if (env.REVIEWERAGENT_CURSOR_CLI_INSTALL_FAILED !== void 0) {
+    return env.REVIEWERAGENT_CURSOR_CLI_INSTALL_FAILED === "true";
+  }
+  if (presentSecret(env.CLAUDE_CODE_OAUTH_TOKEN)) return false;
+  return env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
+}
+function callCursorBackend(systemPrompt, userPayload, agentBin = process.env.REVIEWERAGENT_CURSOR_BIN ?? "agent") {
+  if (!presentSecret(process.env.CURSOR_API_KEY)) {
+    return Promise.reject(new ModelBackendError("CURSOR_API_KEY is not set", { kind: "missing_secret" }));
+  }
+  const root = process.env.RUNNER_TEMP ?? tmpdir();
+  const workspace = mkdtempSync(join(root, "revieweragent-cursor-ws-"));
+  const isolatedHome = mkdtempSync(join(root, "revieweragent-cursor-home-"));
+  mkdirSync(join(isolatedHome, ".cursor"), { recursive: true });
+  const prompt = `${systemPrompt}
+
+${userPayload}`;
+  const childEnv = { ...process.env };
+  childEnv.HOME = isolatedHome;
+  childEnv.XDG_CONFIG_HOME = isolatedHome;
+  childEnv.CURSOR_CONFIG_DIR = join(isolatedHome, ".cursor");
+  delete childEnv.ANTHROPIC_API_KEY;
+  delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn2(agentBin, buildCursorAgentArgv({ workspace, prompt }), {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: childEnv
+      });
+    } catch (err) {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn Cursor agent: ${err.message}`,
+          classifyCursorSpawnError(err, cursorCliInstallFailed())
+        )
+      );
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => stdout += chunk.toString("utf8"));
+    child.stderr.on("data", (chunk) => stderr += chunk.toString("utf8"));
+    child.on("error", (err) => {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn Cursor agent: ${err.message}`,
+          classifyCursorSpawnError(err, cursorCliInstallFailed())
+        )
+      );
+    });
+    child.on("exit", (code) => {
+      try {
+        resolve(parseCursorEnvelope(stdout, code ?? 1, stderr));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+// src/provider/gemini/api-key.ts
+var DEFAULT_MODEL2 = "gemini-3.7-flash";
+var GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+async function callGeminiBackend(systemPrompt, userPayload, apiKey = process.env.GEMINI_API_KEY) {
+  const key = presentSecret(apiKey);
+  if (!key) {
+    throw new ModelBackendError("GEMINI_API_KEY is not set", { kind: "missing_secret" });
+  }
+  const model = process.env.GEMINI_MODEL ?? DEFAULT_MODEL2;
+  const url = `${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent`;
+  const system = `${systemPrompt}
+
+Findings JSON schema:
+${JSON.stringify(FINDINGS_JSON_SCHEMA)}`;
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": key
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: userPayload }] }],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 4096
+        }
+      })
+    });
+  } catch (err) {
+    throw new ModelBackendError(`Network error calling Gemini generateContent: ${err.message}`, {
+      kind: "http_5xx"
+    });
+  }
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new ModelBackendError(
+      `Gemini generateContent returned HTTP ${response.status}`,
+      classifyGeminiHttp(response.status, bodyText)
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    throw new ModelBackendError("Gemini generateContent response was not JSON", { kind: "invalid_json" });
+  }
+  if (parsed.promptFeedback?.blockReason) {
+    throw new ModelBackendError("Gemini generateContent blocked the prompt", { kind: "invalid_json" });
+  }
+  const text = parsed.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+  if (!text.trim()) {
+    throw new ModelBackendError("Gemini generateContent response had no text content", { kind: "invalid_json" });
+  }
+  return text;
+}
+function classifyGeminiHttp(status, bodyText) {
+  const lower = bodyText.toLowerCase();
+  if (status === 429) return { kind: "http_429" };
+  const exhausted = /resource_exhausted|quota|rate.?limit|exceeded/.test(lower);
+  if (status === 403 && exhausted) return { kind: "http_429" };
+  if (/api key not valid|invalid.?api.?key|api_key_invalid/.test(lower)) return { kind: "http_403" };
+  if (status === 401) return { kind: "http_401" };
+  if (status === 403) return { kind: "http_403" };
+  if (status === 400) return { kind: "http_400", auth: "api-key" };
+  if (status >= 500) return { kind: "http_5xx" };
+  return { kind: "invalid_json" };
+}
+
+// src/provider/dispatch.ts
+function claudeCliInstallFailed(env = process.env) {
+  return env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
+}
+function backendCliInstallFailed(provider, auth2) {
+  if (methodNeedsClaudeCli(provider, auth2)) return claudeCliInstallFailed();
+  if (methodNeedsCursorCli(provider)) return cursorCliInstallFailed();
+  return false;
+}
+function credentialValueFor(provider, auth2, role) {
+  if (provider === "cursor") return presentSecret(process.env.CURSOR_API_KEY);
+  if (provider === "gemini") return presentSecret(process.env.GEMINI_API_KEY);
+  if (auth2 === "api-key") {
+    if (role === "fallback") {
+      return presentSecret(process.env[FALLBACK_ANTHROPIC_JOB_ENV]) ?? presentSecret(process.env.ANTHROPIC_API_KEY);
+    }
+    return presentSecret(process.env.ANTHROPIC_API_KEY);
+  }
+  return presentSecret(process.env.CLAUDE_CODE_OAUTH_TOKEN);
+}
+async function callProviderBackend(opts) {
+  const { provider, auth: auth2, role, systemPrompt, userPayload } = opts;
+  if (provider === "cursor") {
+    return callCursorBackend(systemPrompt, userPayload);
+  }
+  if (provider === "gemini") {
+    return callGeminiBackend(systemPrompt, userPayload);
+  }
+  if (auth2 === "subscription") {
+    return callSubscriptionBackend(systemPrompt, userPayload);
+  }
+  return callApiKeyBackend(systemPrompt, userPayload, credentialValueFor("claude", "api-key", role));
+}
+
+// src/core/fallback-trigger.ts
+function isFallbackTrigger(err) {
+  if (err.kind === "http_429") return true;
+  return err.kind === "http_400" && err.auth === "subscription" && err.quotaSignal === true;
+}
+
 // src/core/error-classifier.ts
 function classifyError(err) {
   switch (err.kind) {
@@ -13930,7 +14199,7 @@ function formatReviewStartComment() {
 
 ${REVIEW_START_MARKER}`;
 }
-function formatReviewCompleteComment(kind, summary) {
+function formatReviewCompleteComment(kind, summary, opts) {
   const verdict = verdictFor(kind);
   const details = publicProgressDetails(kind, summary);
   const lines = [
@@ -13941,123 +14210,11 @@ function formatReviewCompleteComment(kind, summary) {
   if (details) {
     lines.push("", details);
   }
+  if (opts?.fallback && (kind === "PASS" || kind === "BLOCK")) {
+    lines.push("", `fallback: ${opts.fallback}`);
+  }
   lines.push("", REVIEW_COMPLETE_MARKER);
   return lines.join("\n");
-}
-
-// src/provider/claude/api-key.ts
-var DEFAULT_MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
-var ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-var ANTHROPIC_VERSION = "2023-06-01";
-async function callApiKeyBackend(systemPrompt, userPayload, apiKey = process.env.ANTHROPIC_API_KEY) {
-  if (!apiKey) {
-    throw new ModelBackendError("ANTHROPIC_API_KEY is not set", { kind: "missing_secret" });
-  }
-  let response;
-  try {
-    response = await fetch(ANTHROPIC_API_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_VERSION
-      },
-      body: JSON.stringify({
-        model: DEFAULT_MODEL,
-        max_tokens: 4096,
-        system: `${systemPrompt}
-
-Findings JSON schema:
-${JSON.stringify(FINDINGS_JSON_SCHEMA)}`,
-        messages: [{ role: "user", content: userPayload }]
-      })
-    });
-  } catch (err) {
-    throw new ModelBackendError(`Network error calling Anthropic Messages API: ${err.message}`, {
-      kind: "http_5xx"
-    });
-  }
-  if (!response.ok) {
-    const classification = classifyHttpStatus(response.status);
-    throw new ModelBackendError(`Anthropic Messages API returned HTTP ${response.status}`, classification);
-  }
-  const body = await response.json();
-  const text = body.content?.find((block) => block.type === "text")?.text;
-  if (!text) {
-    throw new ModelBackendError("Anthropic Messages API response had no text content", { kind: "invalid_json" });
-  }
-  return text;
-}
-function classifyHttpStatus(status) {
-  if (status === 401) return { kind: "http_401" };
-  if (status === 403) return { kind: "http_403" };
-  if (status === 429) return { kind: "http_429" };
-  if (status === 400) return { kind: "http_400", auth: "api-key" };
-  if (status >= 500) return { kind: "http_5xx" };
-  return { kind: "invalid_json" };
-}
-
-// src/provider/cursor/backend.ts
-import { spawn as spawn2 } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-function installFailed() {
-  return process.env.REVIEWERAGENT_CLI_INSTALL_FAILED === "true";
-}
-function callCursorBackend(systemPrompt, userPayload, agentBin = process.env.REVIEWERAGENT_CURSOR_BIN ?? "agent") {
-  if (!process.env.CURSOR_API_KEY) {
-    return Promise.reject(new ModelBackendError("CURSOR_API_KEY is not set", { kind: "missing_secret" }));
-  }
-  const root = process.env.RUNNER_TEMP ?? tmpdir();
-  const workspace = mkdtempSync(join(root, "revieweragent-cursor-ws-"));
-  const isolatedHome = mkdtempSync(join(root, "revieweragent-cursor-home-"));
-  mkdirSync(join(isolatedHome, ".cursor"), { recursive: true });
-  const prompt = `${systemPrompt}
-
-${userPayload}`;
-  const childEnv = { ...process.env };
-  childEnv.HOME = isolatedHome;
-  childEnv.XDG_CONFIG_HOME = isolatedHome;
-  childEnv.CURSOR_CONFIG_DIR = join(isolatedHome, ".cursor");
-  delete childEnv.ANTHROPIC_API_KEY;
-  delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = spawn2(agentBin, buildCursorAgentArgv({ workspace, prompt }), {
-        stdio: ["ignore", "pipe", "pipe"],
-        env: childEnv
-      });
-    } catch (err) {
-      reject(
-        new ModelBackendError(
-          `Failed to spawn Cursor agent: ${err.message}`,
-          classifyCursorSpawnError(err, installFailed())
-        )
-      );
-      return;
-    }
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => stdout += chunk.toString("utf8"));
-    child.stderr.on("data", (chunk) => stderr += chunk.toString("utf8"));
-    child.on("error", (err) => {
-      reject(
-        new ModelBackendError(
-          `Failed to spawn Cursor agent: ${err.message}`,
-          classifyCursorSpawnError(err, installFailed())
-        )
-      );
-    });
-    child.on("exit", (code) => {
-      try {
-        resolve(parseCursorEnvelope(stdout, code ?? 1, stderr));
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
 }
 
 // src/cli/review.ts
@@ -14111,11 +14268,15 @@ async function runReview() {
     if (pr === void 0) return;
     await postProgressComment(comments, pr, marker, body);
   };
-  const publishWithProgress = async (kind, mode, summary, reviewComments) => {
+  const publishWithProgress = async (kind, mode, summary, reviewComments, usedFallback2) => {
     await maybeProgress(ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
     try {
       const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
-      await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment(kind, summary));
+      await maybeProgress(
+        ctx.prNumber,
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment(kind, summary, usedFallback2 ? { fallback: usedFallback2 } : void 0)
+      );
       return code;
     } catch (err) {
       await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment("fail-closed-infra"));
@@ -14212,32 +14373,20 @@ async function runReview() {
     );
   }
   let rawOutput;
+  let usedFallback;
   try {
-    if (config.provider === "cursor") {
-      rawOutput = await callCursorBackend(systemPrompt, userPayload);
-    } else if (config.auth === "subscription") {
-      rawOutput = await callSubscriptionBackend(systemPrompt, userPayload);
-    } else {
-      rawOutput = await callApiKeyBackend(systemPrompt, userPayload);
-    }
+    rawOutput = await callProviderBackend({
+      provider: config.provider,
+      auth: config.auth,
+      role: "primary",
+      systemPrompt,
+      userPayload
+    });
   } catch (err) {
-    if (err instanceof ModelBackendError) {
-      const errClass = classifyError(err.classifiable);
-      return await publishWithProgress(
-        errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
-        config.mode,
-        err.message
-      );
-    }
-    const code = err.code;
-    if (code === "E2BIG") {
-      return await publishWithProgress(
-        "fail-closed-infra",
-        config.mode,
-        "Prompt exceeded the OS argument size limit."
-      );
-    }
-    throw err;
+    const handled = await handlePrimaryBackendError(err, config, publishWithProgress, systemPrompt, userPayload);
+    if (handled.done) return handled.code;
+    rawOutput = handled.rawOutput;
+    usedFallback = handled.usedFallback;
   }
   let findings;
   try {
@@ -14253,7 +14402,115 @@ async function runReview() {
     included,
     findings.findings.filter((f) => f.line !== null).map((f) => ({ path: f.file, line: f.line, severity: f.severity, message: f.message }))
   );
-  return await publishWithProgress(gateResult, config.mode, findings.summary, inlineComments);
+  return await publishWithProgress(gateResult, config.mode, findings.summary, inlineComments, usedFallback);
+}
+async function handlePrimaryBackendError(err, config, publishWithProgress, systemPrompt, userPayload) {
+  if (err.code === "E2BIG") {
+    return {
+      done: true,
+      code: await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit."
+      )
+    };
+  }
+  if (!(err instanceof ModelBackendError)) throw err;
+  if (err.classifiable.kind === "e2big") {
+    return {
+      done: true,
+      code: await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit."
+      )
+    };
+  }
+  if (isFallbackTrigger(err.classifiable) && config.fallback) {
+    const fb = config.fallback;
+    if (!credentialValueFor(fb.provider, fb.auth, "fallback")) {
+      return {
+        done: true,
+        code: await publishWithProgress(
+          "fail-closed-infra",
+          config.mode,
+          "Fallback provider secret is missing."
+        )
+      };
+    }
+    if (backendCliInstallFailed(fb.provider, fb.auth)) {
+      return {
+        done: true,
+        code: await publishWithProgress(
+          "fail-closed-infra",
+          config.mode,
+          "Fallback provider CLI failed to install."
+        )
+      };
+    }
+    try {
+      const rawOutput = await callProviderBackend({
+        provider: fb.provider,
+        auth: fb.auth,
+        role: "fallback",
+        systemPrompt,
+        userPayload
+      });
+      return { done: false, rawOutput, usedFallback: fb.provider };
+    } catch (fbErr) {
+      if (fbErr.code === "E2BIG") {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Prompt exceeded the OS argument size limit."
+          )
+        };
+      }
+      if (fbErr instanceof ModelBackendError && fbErr.classifiable.kind === "e2big") {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Prompt exceeded the OS argument size limit."
+          )
+        };
+      }
+      if (fbErr instanceof ModelBackendError && isFallbackTrigger(fbErr.classifiable)) {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Primary and fallback providers were rate-limited."
+          )
+        };
+      }
+      if (fbErr instanceof ModelBackendError) {
+        const fbClass = classifyError(fbErr.classifiable);
+        return {
+          done: true,
+          code: await publishWithProgress(
+            fbClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
+            config.mode,
+            fbErr.message
+          )
+        };
+      }
+      throw fbErr;
+    }
+  }
+  const errClass = classifyError(err.classifiable);
+  return {
+    done: true,
+    code: await publishWithProgress(
+      errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
+      config.mode,
+      err.message
+    )
+  };
 }
 
 // src/action-entry.ts

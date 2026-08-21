@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MissingInputError, parseNonInteractiveOptions } from "../../src/cli/init.js";
+import { MissingInputError, parseNonInteractiveOptions, fallbackConfirmInitialValue } from "../../src/cli/init.js";
 
 describe("parseNonInteractiveOptions (v2)", () => {
   it("accepts Cursor subscription via --cursor-api-key", () => {
@@ -37,5 +37,76 @@ describe("parseNonInteractiveOptions (v2)", () => {
         apiKey: "sk-ant-testkey",
       }).writeCodeowners,
     ).toBe(false);
+  });
+
+  it("accepts Gemini primary via --gemini-api-key and does not require sk-ant", () => {
+    expect(
+      parseNonInteractiveOptions({
+        provider: "gemini",
+        auth: "api-key",
+        geminiApiKey: "AIza-test-key",
+      }),
+    ).toMatchObject({
+      provider: "gemini",
+      auth: "api-key",
+      credential: "AIza-test-key",
+    });
+  });
+
+  it("rejects a Gemini key passed through --api-key", () => {
+    expect(() =>
+      parseNonInteractiveOptions({
+        provider: "gemini",
+        auth: "api-key",
+        apiKey: "AIza-test-key",
+      }),
+    ).toThrow(MissingInputError);
+  });
+
+  it("accepts Claude subscription plus Gemini fallback flags", () => {
+    expect(
+      parseNonInteractiveOptions({
+        provider: "claude",
+        auth: "subscription",
+        oauthToken: "oauth-test-token-not-real",
+        fallbackProvider: "gemini",
+        fallbackGeminiApiKey: "AIza-test-key",
+      }).fallback,
+    ).toEqual({
+      provider: "gemini",
+      auth: "api-key",
+      credential: "AIza-test-key",
+    });
+  });
+
+  it("rejects fallback flags without --fallback-provider", () => {
+    expect(() =>
+      parseNonInteractiveOptions({
+        provider: "claude",
+        auth: "subscription",
+        oauthToken: "oauth-test-token-not-real",
+        fallbackGeminiApiKey: "AIza-test-key",
+      }),
+    ).toThrow(MissingInputError);
+  });
+
+  it("rejects the same method as fallback", () => {
+    expect(() =>
+      parseNonInteractiveOptions({
+        provider: "claude",
+        auth: "subscription",
+        oauthToken: "oauth-test-token-not-real",
+        fallbackProvider: "claude",
+        fallbackAuth: "subscription",
+        fallbackOauthToken: "other-oauth-token-not-real",
+      }),
+    ).toThrow(MissingInputError);
+  });
+});
+
+describe("fallbackConfirmInitialValue", () => {
+  it("defaults yes only when config already has fallback", () => {
+    expect(fallbackConfirmInitialValue(undefined)).toBe(false);
+    expect(fallbackConfirmInitialValue({ fallback: { provider: "gemini", auth: "api-key" } } as never)).toBe(true);
   });
 });

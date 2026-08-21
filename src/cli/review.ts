@@ -10,6 +10,7 @@ import {
   UnrecognizedConfigVersionError,
   InvalidConfigError,
   type Mode,
+  type ProviderId,
 } from "../core/config-schema.js";
 import { resolveEventContext, UnsupportedEventError } from "./review-event-context.js";
 import { decideSkip } from "./review-skip-rules.js";
@@ -25,6 +26,8 @@ import { wrapUntrustedData } from "../core/sanitizer.js";
 import { buildInstructionsPreamble } from "../core/system-prompt.js";
 import { parseFindings, InvalidFindingsError } from "../core/findings-schema.js";
 import { evaluateGate } from "../core/gate-evaluator.js";
+import { callProviderBackend, backendCliInstallFailed, credentialValueFor, ModelBackendError } from "../provider/dispatch.js";
+import { isFallbackTrigger } from "../core/fallback-trigger.js";
 import { classifyError, type CheckOutcomeKind } from "../core/error-classifier.js";
 import { commentsInDiff, formatFilePatches } from "../core/review-payload.js";
 import { publishCheckAndReview } from "./review-outcome.js";
@@ -36,9 +39,6 @@ import {
   formatReviewCompleteComment,
   summaryWithVerdict,
 } from "./review-progress.js";
-import { callSubscriptionBackend, ModelBackendError } from "../provider/claude/subscription.js";
-import { callApiKeyBackend } from "../provider/claude/api-key.js";
-import { callCursorBackend } from "../provider/cursor/backend.js";
 import { JOB_NAME } from "./write-workflow.js";
 import { shouldReuseMergeGroupCheck } from "./merge-group-reuse.js";
 
@@ -110,11 +110,16 @@ export async function runReview(): Promise<number> {
     mode: Mode,
     summary: string,
     reviewComments?: FindingComment[],
+    usedFallback?: ProviderId,
   ): Promise<number> => {
     await maybeProgress(ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
     try {
       const code = await publish(kind, mode, summaryWithVerdict(kind, summary), reviewComments);
-      await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment(kind, summary));
+      await maybeProgress(
+        ctx.prNumber,
+        REVIEW_COMPLETE_MARKER,
+        formatReviewCompleteComment(kind, summary, usedFallback ? { fallback: usedFallback } : undefined),
+      );
       return code;
     } catch (err) {
       await maybeProgress(ctx.prNumber, REVIEW_COMPLETE_MARKER, formatReviewCompleteComment("fail-closed-infra"));
@@ -230,32 +235,20 @@ export async function runReview(): Promise<number> {
   }
 
   let rawOutput: string;
+  let usedFallback: ProviderId | undefined;
   try {
-    if (config.provider === "cursor") {
-      rawOutput = await callCursorBackend(systemPrompt, userPayload);
-    } else if (config.auth === "subscription") {
-      rawOutput = await callSubscriptionBackend(systemPrompt, userPayload);
-    } else {
-      rawOutput = await callApiKeyBackend(systemPrompt, userPayload);
-    }
+    rawOutput = await callProviderBackend({
+      provider: config.provider,
+      auth: config.auth,
+      role: "primary",
+      systemPrompt,
+      userPayload,
+    });
   } catch (err) {
-    if (err instanceof ModelBackendError) {
-      const errClass = classifyError(err.classifiable);
-      return await publishWithProgress(
-        errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
-        config.mode,
-        err.message,
-      );
-    }
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "E2BIG") {
-      return await publishWithProgress(
-        "fail-closed-infra",
-        config.mode,
-        "Prompt exceeded the OS argument size limit.",
-      );
-    }
-    throw err;
+    const handled = await handlePrimaryBackendError(err, config, publishWithProgress, systemPrompt, userPayload);
+    if (handled.done) return handled.code;
+    rawOutput = handled.rawOutput;
+    usedFallback = handled.usedFallback;
   }
 
   let findings;
@@ -276,5 +269,130 @@ export async function runReview(): Promise<number> {
       .map((f) => ({ path: f.file, line: f.line, severity: f.severity, message: f.message })),
   );
 
-  return await publishWithProgress(gateResult, config.mode, findings.summary, inlineComments);
+  return await publishWithProgress(gateResult, config.mode, findings.summary, inlineComments, usedFallback);
+}
+
+type PublishWithProgress = (
+  kind: CheckOutcomeKind,
+  mode: Mode,
+  summary: string,
+  reviewComments?: FindingComment[],
+  usedFallback?: ProviderId,
+) => Promise<number>;
+
+async function handlePrimaryBackendError(
+  err: unknown,
+  config: ReturnType<typeof parseConfig>,
+  publishWithProgress: PublishWithProgress,
+  systemPrompt: string,
+  userPayload: string,
+): Promise<{ done: true; code: number } | { done: false; rawOutput: string; usedFallback: ProviderId }> {
+  if ((err as NodeJS.ErrnoException).code === "E2BIG") {
+    return {
+      done: true,
+      code: await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit.",
+      ),
+    };
+  }
+  if (!(err instanceof ModelBackendError)) throw err;
+  if (err.classifiable.kind === "e2big") {
+    return {
+      done: true,
+      code: await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit.",
+      ),
+    };
+  }
+
+  if (isFallbackTrigger(err.classifiable) && config.fallback) {
+    const fb = config.fallback;
+    if (!credentialValueFor(fb.provider, fb.auth, "fallback")) {
+      return {
+        done: true,
+        code: await publishWithProgress(
+          "fail-closed-infra",
+          config.mode,
+          "Fallback provider secret is missing.",
+        ),
+      };
+    }
+    if (backendCliInstallFailed(fb.provider, fb.auth)) {
+      return {
+        done: true,
+        code: await publishWithProgress(
+          "fail-closed-infra",
+          config.mode,
+          "Fallback provider CLI failed to install.",
+        ),
+      };
+    }
+    try {
+      const rawOutput = await callProviderBackend({
+        provider: fb.provider,
+        auth: fb.auth,
+        role: "fallback",
+        systemPrompt,
+        userPayload,
+      });
+      return { done: false, rawOutput, usedFallback: fb.provider };
+    } catch (fbErr) {
+      if ((fbErr as NodeJS.ErrnoException).code === "E2BIG") {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Prompt exceeded the OS argument size limit.",
+          ),
+        };
+      }
+      if (fbErr instanceof ModelBackendError && fbErr.classifiable.kind === "e2big") {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Prompt exceeded the OS argument size limit.",
+          ),
+        };
+      }
+      if (fbErr instanceof ModelBackendError && isFallbackTrigger(fbErr.classifiable)) {
+        return {
+          done: true,
+          code: await publishWithProgress(
+            "fail-closed-infra",
+            config.mode,
+            "Primary and fallback providers were rate-limited.",
+          ),
+        };
+      }
+      if (fbErr instanceof ModelBackendError) {
+        const fbClass = classifyError(fbErr.classifiable);
+        return {
+          done: true,
+          code: await publishWithProgress(
+            fbClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
+            config.mode,
+            fbErr.message,
+          ),
+        };
+      }
+      throw fbErr;
+    }
+  }
+
+  const errClass = classifyError(err.classifiable);
+  return {
+    done: true,
+    code: await publishWithProgress(
+      errClass === "fail-closed" ? "fail-closed-infra" : "availability-skip",
+      config.mode,
+      err.message,
+    ),
+  };
 }

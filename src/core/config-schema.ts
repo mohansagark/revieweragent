@@ -6,7 +6,13 @@ import { parseDocument, Document } from "yaml";
 
 export const CONFIG_SCHEMA_VERSION = 1;
 
-export type ProviderId = "claude" | "cursor";
+export type ProviderId = "claude" | "cursor" | "gemini";
+export const LIVE_PROVIDERS: readonly ProviderId[] = ["claude", "cursor", "gemini"];
+
+export interface FallbackConfig {
+  provider: ProviderId;
+  auth: AuthType;
+}
 export type AuthType = "subscription" | "api-key";
 export type Mode = "advisory" | "gate";
 export type Severity = "critical" | "high" | "medium" | "low" | "note";
@@ -34,6 +40,7 @@ export interface RevieweragentConfig {
   fork_policy: ForkPolicy;
   trigger_phrase: string;
   exclude: string[];
+  fallback?: FallbackConfig;
 }
 
 export const DEFAULT_EXCLUDE = [
@@ -112,19 +119,43 @@ export function parseConfig(raw: string): RevieweragentConfig {
   }
 
   const config = { ...defaultConfig(), ...obj } as RevieweragentConfig;
+  if (config.fallback == null) {
+    delete config.fallback;
+  }
   validateConfig(config);
   return config;
 }
 
+export function methodKey(provider: ProviderId, auth: AuthType): string {
+  return `${provider}:${auth}`;
+}
+
+function validateProviderAuth(provider: ProviderId, auth: AuthType, label: string): void {
+  if (!(LIVE_PROVIDERS as readonly string[]).includes(provider)) {
+    throw new InvalidConfigError(`${label}unsupported provider "${String(provider)}"`);
+  }
+  if (auth !== "subscription" && auth !== "api-key") {
+    throw new InvalidConfigError(`${label}unsupported auth "${String(auth)}"`);
+  }
+  if (provider === "cursor" && auth !== "subscription") {
+    throw new InvalidConfigError(`${label}provider "cursor" only supports auth: subscription`);
+  }
+  if (provider === "gemini" && auth !== "api-key") {
+    throw new InvalidConfigError(`${label}provider "gemini" only supports auth: api-key`);
+  }
+}
+
 function validateConfig(config: RevieweragentConfig): void {
-  if (config.provider !== "claude" && config.provider !== "cursor") {
-    throw new InvalidConfigError(`unsupported provider "${String(config.provider)}"`);
-  }
-  if (config.auth !== "subscription" && config.auth !== "api-key") {
-    throw new InvalidConfigError(`unsupported auth "${String(config.auth)}"`);
-  }
-  if (config.provider === "cursor" && config.auth !== "subscription") {
-    throw new InvalidConfigError('provider "cursor" only supports auth: subscription');
+  validateProviderAuth(config.provider, config.auth, "");
+  if (config.fallback !== undefined) {
+    const fb = config.fallback as Partial<FallbackConfig>;
+    if (typeof fb !== "object" || fb === null || !fb.provider || !fb.auth) {
+      throw new InvalidConfigError("fallback must include provider and auth");
+    }
+    validateProviderAuth(fb.provider, fb.auth, "fallback ");
+    if (methodKey(fb.provider, fb.auth) === methodKey(config.provider, config.auth)) {
+      throw new InvalidConfigError("fallback must use a different method than the primary provider");
+    }
   }
   if (config.mode !== "advisory" && config.mode !== "gate") {
     throw new InvalidConfigError(`unsupported mode "${String(config.mode)}"`);
@@ -182,7 +213,14 @@ export function serializeConfig(
       throw new InvalidConfigYamlError(err);
     }
     for (const [key, value] of Object.entries(config)) {
+      if (value === undefined) {
+        doc.delete(key);
+        continue;
+      }
       doc.set(key, value);
+    }
+    if (config.fallback === undefined) {
+      doc.delete("fallback");
     }
     // Real bug found in manual testing: MANAGED_HEADER is a YAML comment,
     // so parseDocument() preserves it as a leading comment on the

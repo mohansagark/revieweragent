@@ -200,4 +200,30 @@ describe("init e2e (temp git repo + real libsodium + fake GitHub)", () => {
     expect(codeowners).toContain("@alice");
     expect(codeowners).toContain("# revieweragent:end");
   });
+
+  it("writes Gemini fallback env and both secrets", async () => {
+    const github = await setup();
+    await runInit({
+      provider: "claude",
+      auth: "subscription",
+      mode: "gate",
+      severity: "high",
+      credential: "oauth-test-token-not-real",
+      fallback: { provider: "gemini", auth: "api-key", credential: "AIza-test-key" },
+      nonInteractive: true,
+      commit: false,
+      push: false,
+      writeCodeowners: false,
+    });
+    const workflow = readFileSync(join(repo.dir, ".github/workflows/revieweragent.yml"), "utf8");
+    const config = readFileSync(join(repo.dir, ".revieweragent.yml"), "utf8");
+    expect(workflow).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(workflow).toContain("GEMINI_API_KEY");
+    expect(workflow).not.toContain("ANTHROPIC_API_KEY");
+    expect(config).toContain("provider: gemini");
+    expect(github.calls.putSecret.map((s) => s.secret_name).sort()).toEqual([
+      "REVIEWERAGENT_CLAUDE_CODE_OAUTH_TOKEN",
+      "REVIEWERAGENT_GEMINI_API_KEY",
+    ]);
+  });
 });

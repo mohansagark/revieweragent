@@ -14,6 +14,7 @@ export function upgradeManagedWorkflow(existingRaw: string, configRaw: string): 
   return buildWorkflowYaml({
     auth: config.auth,
     provider: config.provider,
+    fallback: config.fallback,
     shas: loadPinnedShas(),
   });
 }
