@@ -2,6 +2,7 @@ import { JOB_NAME } from "./write-workflow.js";
 import {
   getProtectionHasCheck,
   mergeRequiredCheck,
+  putClassicProtection,
   type ClassicProtection,
 } from "../platform/github/apply-protection.js";
 import { createGitHubClient, parseOwnerRepo, resolveGitHubToken } from "../platform/github/client.js";
@@ -23,7 +24,9 @@ export async function applyProtection(args: { yes?: boolean; nonInteractive: boo
         path: ".github/workflows/revieweragent.yml",
         ref: defaultBranch,
       });
-    } catch {
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status !== 404) throw err;
       console.log(
         `Hard gate: .github/workflows/revieweragent.yml is not on ${defaultBranch}. Push the workflow, then re-run apply-protection.`,
       );
@@ -52,12 +55,7 @@ export async function applyProtection(args: { yes?: boolean; nonInteractive: boo
     }
 
     const next = mergeRequiredCheck(existing, JOB_NAME);
-    await octokit.repos.updateBranchProtection({
-      owner,
-      repo,
-      branch: defaultBranch,
-      ...next,
-    } as Parameters<typeof octokit.repos.updateBranchProtection>[0]);
+    await putClassicProtection(octokit, owner, repo, defaultBranch, next);
 
     const { data: verified } = await octokit.repos.getBranchProtection({ owner, repo, branch: defaultBranch });
     if (!getProtectionHasCheck(verified as ClassicProtection, JOB_NAME)) {

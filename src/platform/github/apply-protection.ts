@@ -95,11 +95,13 @@ export function mergeRequiredCheck(existing: ClassicProtection, checkName: strin
   const current = existing.required_status_checks;
   const contexts = [...(current?.contexts ?? [])];
   const checks = [...(current?.checks ?? [])].map((check) => ({ context: check.context }));
-  if (!contexts.includes(checkName)) contexts.push(checkName);
-  if (!checks.some((check) => check.context === checkName)) checks.push({ context: checkName });
+  // Must run before pushing checkName: otherwise a contexts-only GET
+  // PUTs checks:[revieweragent] and GitHub drops the other required checks.
   if (checks.length === 0) {
     for (const context of contexts) checks.push({ context });
   }
+  if (!contexts.includes(checkName)) contexts.push(checkName);
+  if (!checks.some((check) => check.context === checkName)) checks.push({ context: checkName });
 
   const next: ClassicProtectionPut = {
     required_status_checks: {
@@ -122,6 +124,16 @@ export function mergeRequiredCheck(existing: ClassicProtection, checkName: strin
   next.allow_fork_syncing = asBoolean(existing.allow_fork_syncing) ?? false;
 
   return next;
+}
+
+export async function putClassicProtection(
+  octokit: { repos: { updateBranchProtection: (params: never) => Promise<unknown> } },
+  owner: string,
+  repo: string,
+  branch: string,
+  next: ClassicProtectionPut,
+): Promise<void> {
+  await octokit.repos.updateBranchProtection({ owner, repo, branch, ...next } as never);
 }
 
 export function protectionContainsCheck(payload: ClassicProtectionPut, checkName: string): boolean {
