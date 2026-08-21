@@ -36,10 +36,21 @@ export function callCursorBackend(
   delete childEnv.CLAUDE_CODE_OAUTH_TOKEN;
 
   return new Promise((resolve, reject) => {
-    const child = spawn(agentBin, buildCursorAgentArgv({ workspace, prompt }), {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: childEnv,
-    });
+    let child;
+    try {
+      child = spawn(agentBin, buildCursorAgentArgv({ workspace, prompt }), {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: childEnv,
+      });
+    } catch (err) {
+      reject(
+        new ModelBackendError(
+          `Failed to spawn Cursor agent: ${(err as Error).message}`,
+          classifyCursorSpawnError(err as NodeJS.ErrnoException, installFailed()),
+        ),
+      );
+      return;
+    }
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));

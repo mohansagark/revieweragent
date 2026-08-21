@@ -228,6 +228,14 @@ export async function runReview(): Promise<number> {
         err.message,
       );
     }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "E2BIG") {
+      return await publishWithProgress(
+        "fail-closed-infra",
+        config.mode,
+        "Prompt exceeded the OS argument size limit.",
+      );
+    }
     throw err;
   }
 

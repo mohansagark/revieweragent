@@ -376,6 +376,15 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     expect(githubState.subscription).not.toHaveBeenCalled();
   });
 
+  it("fail-closes when spawn throws E2BIG instead of crashing the job", async () => {
+    const github = await setup({ config: { mode: "gate", auth: "subscription" } });
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "oauth-test-token-not-real";
+    githubState.subscription.mockRejectedValue(Object.assign(new Error("spawn E2BIG"), { code: "E2BIG" }));
+    await expect(runReview()).resolves.toBe(1);
+    expect(github.checks[0]?.conclusion).toBe("failure");
+    expect(github.checks[0]?.output?.summary).toMatch(/argument size limit/i);
+  });
+
   it("reuses a PASS check on merge_group without calling the model or posting comments", async () => {
     const mergeSha = "cccccccccccccccccccccccccccccccccccccccc";
     const github = await setup({
