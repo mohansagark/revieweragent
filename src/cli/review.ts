@@ -9,6 +9,7 @@ import {
   InvalidConfigYamlError,
   UnrecognizedConfigVersionError,
   InvalidConfigError,
+  type Mode,
 } from "../core/config-schema.js";
 import { resolveEventContext, UnsupportedEventError } from "./review-event-context.js";
 import { decideSkip } from "./review-skip-rules.js";
@@ -24,9 +25,10 @@ import { wrapUntrustedData } from "../core/sanitizer.js";
 import { buildInstructionsPreamble } from "../core/system-prompt.js";
 import { parseFindings, InvalidFindingsError } from "../core/findings-schema.js";
 import { evaluateGate } from "../core/gate-evaluator.js";
-import { classifyError } from "../core/error-classifier.js";
+import { classifyError, type CheckOutcomeKind } from "../core/error-classifier.js";
 import { commentsInDiff, formatFilePatches } from "../core/review-payload.js";
 import { publishCheckAndReview } from "./review-outcome.js";
+import type { FindingComment } from "../platform/types.js";
 import {
   REVIEW_START_MARKER,
   REVIEW_COMPLETE_MARKER,
@@ -82,10 +84,10 @@ export async function runReview(): Promise<number> {
   }
 
   const publish = (
-    kind: Parameters<typeof publishCheckAndReview>[0]["kind"],
-    mode: Parameters<typeof publishCheckAndReview>[0]["mode"],
+    kind: CheckOutcomeKind,
+    mode: Mode,
     summary: string,
-    reviewComments?: Parameters<typeof publishCheckAndReview>[0]["comments"],
+    reviewComments?: FindingComment[],
   ) =>
     publishCheckAndReview({
       checks,
@@ -104,10 +106,10 @@ export async function runReview(): Promise<number> {
   };
 
   const publishWithProgress = async (
-    kind: Parameters<typeof publishCheckAndReview>[0]["kind"],
-    mode: Parameters<typeof publishCheckAndReview>[0]["mode"],
+    kind: CheckOutcomeKind,
+    mode: Mode,
     summary: string,
-    reviewComments?: Parameters<typeof publishCheckAndReview>[0]["comments"],
+    reviewComments?: FindingComment[],
   ): Promise<number> => {
     await maybeProgress(ctx.prNumber, REVIEW_START_MARKER, formatReviewStartComment());
     try {

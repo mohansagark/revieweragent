@@ -34,4 +34,24 @@ describe("apply-protection RMW (v2)", () => {
     expect(next.required_status_checks.contexts).toEqual(["ci", "lint", "revieweragent"]);
     expect(next.required_status_checks.checks.map((c) => c.context)).toEqual(["ci", "lint", "revieweragent"]);
   });
+
+  it("preserves app_id on existing required checks", () => {
+    const next = mergeRequiredCheck(
+      {
+        required_status_checks: {
+          strict: true,
+          contexts: ["ci"],
+          checks: [{ context: "ci", app_id: 15368 }],
+        },
+        enforce_admins: { enabled: true },
+        required_pull_request_reviews: null,
+        restrictions: null,
+      },
+      "revieweragent",
+    );
+    expect(next.required_status_checks.checks).toEqual([
+      { context: "ci", app_id: 15368 },
+      { context: "revieweragent" },
+    ]);
+  });
 });

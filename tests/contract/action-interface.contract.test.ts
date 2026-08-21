@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
-import { buildWorkflowYaml, JOB_NAME, WORKFLOW_JOB_ID } from "../../src/cli/write-workflow.js";
+import { buildWorkflowYaml, JOB_NAME, WORKFLOW_JOB_ID, type WorkflowOptions } from "../../src/cli/write-workflow.js";
 
 // Validates the generated workflow against
 // specs/001-v1-core-commands/contracts/action-interface.md's required
@@ -98,7 +98,7 @@ describe("action-interface contract", () => {
     // GitHub Actions can never resolve, since actions/review only exists
     // in this package's own repo. WorkflowOptions has no owner/repo field
     // any more; only shas.actionOwner/actionRepo feed the `uses:` line.
-    const opts: Parameters<typeof buildWorkflowYaml>[0] = {
+    const opts: WorkflowOptions = {
       auth: "api-key",
       shas: {
         checkoutSha: "a".repeat(40),

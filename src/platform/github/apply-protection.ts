@@ -20,7 +20,7 @@ export interface ClassicProtectionPut {
   required_status_checks: {
     strict: boolean;
     contexts: string[];
-    checks: Array<{ context: string }>;
+    checks: Array<{ context: string; app_id?: number | null }>;
   };
   enforce_admins: boolean;
   required_pull_request_reviews: unknown;
@@ -94,7 +94,9 @@ export function getProtectionHasCheck(existing: ClassicProtection, checkName: st
 export function mergeRequiredCheck(existing: ClassicProtection, checkName: string): ClassicProtectionPut {
   const current = existing.required_status_checks;
   const contexts = [...(current?.contexts ?? [])];
-  const checks = [...(current?.checks ?? [])].map((check) => ({ context: check.context }));
+  const checks = [...(current?.checks ?? [])].map((check) =>
+    check.app_id === undefined ? { context: check.context } : { context: check.context, app_id: check.app_id },
+  );
   // Must run before pushing checkName: otherwise a contexts-only GET
   // PUTs checks:[revieweragent] and GitHub drops the other required checks.
   if (checks.length === 0) {
