@@ -86,7 +86,7 @@ Already installed `1.0.0`? Re-run init to refresh the workflow pin (progress com
 npx revieweragent@1.1.0 init
 ```
 
-That overwrites `.github/workflows/revieweragent.yml` and the GitHub secret. Commit the workflow change.
+Init confirms before overwriting a managed workflow. It writes the GitHub secret for the auth you select (same as first install). Commit the workflow change.
 
 ## License
 
