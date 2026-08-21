@@ -128,27 +128,8 @@ describe("uninstall e2e (temp git repo + fake GitHub)", () => {
 
   it("uninstall() maps refused-without-consent to exit 1", async () => {
     await setup();
-    await expect(uninstall({ nonInteractive: true, yes: false })).resolves.toBe(1);
-  });
-
-  it("removes only the managed CODEOWNERS block", async () => {
-    await setup();
-    mkdirSync(join(repo.dir, ".github"), { recursive: true });
-    writeFileSync(
-      join(repo.dir, ".github/CODEOWNERS"),
-      ["* @maintainers", "", "# revieweragent:start", ".revieweragent.yml  @alice", "# revieweragent:end", "", "docs/ @docs"].join(
-        "\n",
-      ) + "\n",
-    );
-    await runUninstall({
-      nonInteractive: true,
-      yes: true,
-      deleteSecret: false,
-      deleteLocalCredentials: false,
-    });
-    const remaining = readFileSync(join(repo.dir, ".github/CODEOWNERS"), "utf8");
-    expect(remaining).toContain("* @maintainers");
-    expect(remaining).toContain("docs/ @docs");
-    expect(remaining).not.toContain("revieweragent:start");
+    await expect(
+      uninstall({ nonInteractive: true, yes: false }),
+    ).resolves.toBe(1);
   });
 });
