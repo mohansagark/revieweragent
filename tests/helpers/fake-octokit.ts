@@ -69,6 +69,7 @@ export interface FakeGithub {
     deleteSecret: string[];
     createReview: unknown[];
     updateReview: unknown[];
+    createComment: unknown[];
     createCheck: unknown[];
     updateCheck: unknown[];
   };
@@ -104,6 +105,7 @@ export async function createFakeGithub(): Promise<FakeGithub> {
     deleteSecret: [],
     createReview: [],
     updateReview: [],
+    createComment: [],
     createCheck: [],
     updateCheck: [],
   };
@@ -226,6 +228,12 @@ export async function createFakeGithub(): Promise<FakeGithub> {
           return { data: run };
         },
       ),
+    },
+    issues: {
+      createComment: vi.fn(async (params: { issue_number: number; body: string }) => {
+        calls.createComment.push(params);
+        return { data: { id: calls.createComment.length, body: params.body } };
+      }),
     },
     repos: {
       getCollaboratorPermissionLevel: vi.fn(async ({ username }: { username: string }) => {

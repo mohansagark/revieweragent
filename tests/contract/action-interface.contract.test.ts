@@ -45,6 +45,7 @@ describe("action-interface contract", () => {
     expect(job.permissions).toEqual({
       contents: "read",
       "pull-requests": "write",
+      issues: "write",
       checks: "write",
       actions: "read",
     });

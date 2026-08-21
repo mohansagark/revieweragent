@@ -130,6 +130,10 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(1);
     expect(github.calls.createCheck).toHaveLength(1);
+    expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
+      "🔍 **Review starting**",
+      "✅ **Review completed**",
+    ]);
     expect(github.checks[0]?.conclusion).toBe("success");
     expect(github.checks[0]?.headSha).toBe(HEAD);
   });
@@ -140,6 +144,10 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     githubState.subscription.mockResolvedValue(BLOCK_JSON);
     await expect(runReview()).resolves.toBe(1);
     expect(github.checks[0]?.conclusion).toBe("failure");
+    expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
+      "🔍 **Review starting**",
+      "⚠️ **Review completed** — findings posted on the diff.",
+    ]);
     const review = github.calls.createReview[0] as { comments?: unknown[] };
     expect(review.comments?.length).toBeGreaterThan(0);
   });
@@ -176,6 +184,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createCheck).toHaveLength(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("no-ops comment-gated fork PRs", async () => {
@@ -185,6 +194,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     });
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("enforces the per-actor fork cap and no-ops when exceeded", async () => {
@@ -197,6 +207,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     github.checks.push({ id: 9, name: "revieweragent", headSha: HEAD, conclusion: "success" });
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("reviews a fork PR under the cap", async () => {
@@ -230,6 +241,7 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     });
     await expect(runReview()).resolves.toBe(0);
     expect(github.calls.createReview).toHaveLength(0);
+    expect(github.calls.createComment).toHaveLength(0);
   });
 
   it("runs on a write-access /review comment", async () => {
@@ -335,6 +347,10 @@ describe("review e2e (temp repo + fake GitHub + mocked model)", () => {
     await expect(runReview()).rejects.toThrow(/Validation Failed/);
     expect(github.checks[0]?.conclusion).toBe("failure");
     expect(github.checks[0]?.headSha).toBe(HEAD);
+    expect(github.calls.createComment.map((c) => (c as { body: string }).body)).toEqual([
+      "🔍 **Review starting**",
+      "⚠️ **Review completed** — findings posted on the diff.",
+    ]);
   });
 
   it("uses the api-key backend when config.auth is api-key", async () => {

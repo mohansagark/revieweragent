@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { init } from "./init.js";
 import { uninstall } from "./uninstall.js";
+import { argvWithDefaultInitCommand } from "./default-command.js";
 
 // SPEC.md §4: the prompt UI is a layer over a non-interactive engine.
 // Every command works with flags + env when --non-interactive is set or
@@ -54,7 +55,7 @@ program
     process.exitCode = exitCode;
   });
 
-program.parseAsync(process.argv).catch((err) => {
+program.parseAsync(["node", "revieweragent", ...argvWithDefaultInitCommand(process.argv.slice(2))]).catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
